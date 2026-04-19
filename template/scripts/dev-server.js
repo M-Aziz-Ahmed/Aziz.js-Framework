@@ -21,8 +21,14 @@ try {
     Babel = null;
 }
 
-function transformJSX(code, filename) {
+function transformJSX(code, filename, filePath) {
     if (!Babel) return code;
+    
+    // Skip framework internals — they have no JSX
+    if (filePath.includes('/_framework/') || filePath.includes('\\_framework\\')) {
+        return code;
+    }
+    
     try {
         const result = Babel.transform(code, {
             filename,
@@ -35,7 +41,6 @@ function transformJSX(code, filename) {
         return result.code;
     } catch (err) {
         console.error(`❌ JSX transform error in ${filename}:`, err.message);
-        // Return error as a JS comment so browser shows it
         return `throw new Error(${JSON.stringify('JSX transform error in ' + filename + ': ' + err.message)});`;
     }
 }
@@ -394,8 +399,7 @@ const server = http.createServer(async (req, res) => {
         // Transform JS/JSX files: JSX → h() + rewrite imports
         if (fileExt === '.js' || fileExt === '.jsx' || fileExt === '.mjs') {
             let code = content.toString();
-            // Transform JSX first, then rewrite imports
-            code = transformJSX(code, path.basename(filePath));
+            code = transformJSX(code, path.basename(filePath), filePath);
             code = rewriteImports(code, filePath);
             content = Buffer.from(code);
         }
