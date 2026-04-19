@@ -271,7 +271,15 @@ export const router = {
             };
         }
 
-        // Render
+        // Render — preserve focus so inputs don't lose cursor on state update
+        const activeEl = document.activeElement;
+        const activeId = activeEl?.id || null;
+        const activeName = activeEl?.getAttribute?.('name') || null;
+        const activePlaceholder = activeEl?.getAttribute?.('placeholder') || null;
+        const activeTag = activeEl?.tagName || null;
+        const activeCursorStart = activeEl?.selectionStart ?? null;
+        const activeCursorEnd = activeEl?.selectionEnd ?? null;
+
         root.innerHTML = '';
         const tree = content();
         if (Array.isArray(tree)) {
@@ -280,6 +288,24 @@ export const router = {
             });
         } else if (tree instanceof Node) {
             root.appendChild(tree);
+        }
+
+        // Restore focus to the previously active input
+        let restored = null;
+        if (activeId) {
+            restored = root.querySelector(`#${CSS.escape(activeId)}`);
+        }
+        if (!restored && activeName) {
+            restored = root.querySelector(`[name="${activeName}"]`);
+        }
+        if (!restored && activePlaceholder && activeTag) {
+            restored = root.querySelector(`${activeTag.toLowerCase()}[placeholder="${activePlaceholder}"]`);
+        }
+        if (restored && typeof restored.focus === 'function') {
+            restored.focus();
+            if (activeCursorStart !== null && restored.setSelectionRange) {
+                try { restored.setSelectionRange(activeCursorStart, activeCursorEnd); } catch {}
+            }
         }
     }
 };
