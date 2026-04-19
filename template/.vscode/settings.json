@@ -1,0 +1,15 @@
+{
+    "tailwindCSS.includeLanguages": {
+        "javascript": "javascriptreact"
+    },
+    "tailwindCSS.experimental.classRegex": [
+        ["class\\s*=\\s*[\"'`]([^\"'`]*)[\"'`]", "([^\"'`]*)"],
+        ["className\\s*=\\s*[\"'`]([^\"'`]*)[\"'`]", "([^\"'`]*)"]
+    ],
+    "editor.quickSuggestions": {
+        "strings": "on"
+    },
+    "[javascript]": {
+        "editor.defaultFormatter": "esbenp.prettier-vscode"
+    }
+}
