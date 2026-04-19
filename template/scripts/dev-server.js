@@ -62,23 +62,17 @@ function buildRouteManifest() {
             const fullPath = path.join(dir, entry.name);
 
             if (entry.isDirectory()) {
-                // Dynamic route: [slug] → :slug
-                const segment = entry.name.startsWith('[') && entry.name.endsWith(']')
-                    ? ':' + entry.name.slice(1, -1)
-                    : entry.name;
+                // Keep [slug] as-is — router.js matchRoute expects square bracket syntax
+                const segment = entry.name;
                 scan(fullPath, routeBase === '/' ? '/' + segment : routeBase + '/' + segment);
             } else if (entry.name === 'page.js' || entry.name === 'page.jsx') {
-                manifest.push({
-                    type: 'page',
-                    pathname: routeBase || '/',
-                    filePath: '/app' + (routeBase === '/' ? '' : routeBase) + '/' + entry.name
-                });
+                const pathname = routeBase || '/';
+                const filePath = '/app' + (pathname === '/' ? '' : pathname) + '/' + entry.name;
+                manifest.push({ type: 'page', pathname, filePath });
             } else if (entry.name === 'layout.js' || entry.name === 'layout.jsx') {
-                manifest.push({
-                    type: 'layout',
-                    pathname: routeBase || '/',
-                    filePath: '/app' + (routeBase === '/' ? '' : routeBase) + '/' + entry.name
-                });
+                const pathname = routeBase || '/';
+                const filePath = '/app' + (pathname === '/' ? '' : pathname) + '/' + entry.name;
+                manifest.push({ type: 'layout', pathname, filePath });
             }
         }
     }

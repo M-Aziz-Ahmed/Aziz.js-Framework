@@ -183,13 +183,17 @@ export const router = {
             const res = await fetch('/_framework/routes.json');
             const manifest = await res.json();
 
+            console.log('📋 Route manifest:', manifest);
+
             for (const { pathname, filePath, type } of manifest) {
                 try {
                     const mod = await import(filePath + '?t=' + Date.now());
                     if (type === 'page') {
                         this.register(pathname, mod);
+                        console.log(`✅ Registered page: ${pathname} → ${filePath}`);
                     } else if (type === 'layout') {
                         this.registerLayout(pathname, mod);
+                        console.log(`✅ Registered layout: ${pathname} → ${filePath}`);
                     }
                 } catch (err) {
                     console.error(`❌ Failed to load ${filePath}:`, err);
@@ -208,6 +212,7 @@ export const router = {
 
         // Find matching route
         const match = resolveRoute(pathname);
+        console.log(`🔍 resolveRoute('${pathname}'):`, match);
 
         if (!match) {
             root.innerHTML = '';
