@@ -64,8 +64,6 @@ nav a.active {
 /* Page wrapper */
 #root {
     flex: 1;
-    padding: 40px 32px;
-    max-width: 900px;
     width: 100%;
     margin: 0 auto;
 }
