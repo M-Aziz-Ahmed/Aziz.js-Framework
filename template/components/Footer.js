@@ -1,6 +1,3 @@
-/** @jsx h */
-import { h } from '/_framework/runtime.js';
-
 export default function Footer() {
     return (
         <footer>

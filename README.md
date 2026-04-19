@@ -22,7 +22,7 @@ Aziz.js gives you the Next.js developer experience without the weight:
 | API routes | ✅ | ✅ |
 | `NextResponse` | ✅ | ✅ |
 | React hooks | ✅ | ✅ |
-| ES module imports | ✅ | ✅ |
+| No imports needed in pages | ✅ | ❌ |
 | `@/` alias | ✅ | ✅ |
 | Live reload | ✅ | ✅ |
 | SSR / SSG | ❌ | ✅ |
@@ -50,7 +50,7 @@ The CLI will ask you:
 
 ```
 my-app/
-├── index.html              ← entry point
+├── index.html
 ├── app/
 │   ├── layout.js           ← root layout
 │   ├── page.js             ← route: /
@@ -76,11 +76,10 @@ my-app/
 
 ## Pages
 
+No imports needed — JSX and all hooks just work.
+
 ```js
 // app/about/page.js  →  /about
-/** @jsx h */
-import { h } from '/_framework/runtime.js';
-
 export default function Page() {
     const [count, setCount] = useState(0);
 
@@ -100,8 +99,6 @@ export default function Page() {
 
 ```js
 // app/layout.js  →  wraps every page
-/** @jsx h */
-import { h } from '/_framework/runtime.js';
 import Navbar from '/components/Navbar.js';
 
 export default function Layout({ children }) {
@@ -120,18 +117,14 @@ export default function Layout({ children }) {
 
 ```js
 // api/users.js  →  /api/users
-const { NextResponse } = require('../modules/next-response');
+const { NextResponse } = require('../_framework/next-response');
 
 async function GET(request) {
-    const { searchParams } = new URL(request.url);
-    const id = searchParams.get('id');
-    // fetch from DB...
     return NextResponse.json({ users: [] });
 }
 
 async function POST(request) {
     const { name, email } = await request.json();
-    // save to DB...
     return NextResponse.json({ created: true }, { status: 201 });
 }
 
@@ -140,39 +133,15 @@ module.exports = { GET, POST };
 
 ---
 
-## Imports
+## Hooks
+
+All React hooks are available globally — no imports needed:
 
 ```js
-// Framework
-import { h }        from '/_framework/runtime.js';
-import { navigate } from '/_framework/router.js';
+const [count, setCount] = useState(0);
+const [user, setUser]   = useState(null);
 
-// Absolute paths
-import Navbar from '/components/Navbar.js';
-
-// @/ alias
-import connectDB from '@/lib/db';
-import User      from '@/models/User';
-
-// npm packages (install first, then import)
-import mongoose from 'mongoose';
-import bcrypt   from 'bcryptjs';
-import jwt      from 'jsonwebtoken';
-```
-
----
-
-## React Hooks
-
-All hooks work exactly like React — no imports needed in pages:
-
-```js
-const [count, setCount]   = useState(0);
-const [user, setUser]     = useState(null);
-
-useEffect(() => {
-    fetchUser().then(setUser);
-}, []);
+useEffect(() => { fetchUser().then(setUser); }, []);
 
 const doubled = useMemo(() => count * 2, [count]);
 const ref     = useRef(null);
@@ -191,30 +160,41 @@ const { data, loading, error } = useFetch('/api/users');
 ## Navigation
 
 ```js
-import { navigate, Link, useRouter, useParams, useSearchParams } from '/_framework/router.js';
-
 // Programmatic
 navigate('/about');
 
-// Component
+// Link component
 <Link href="/about">About</Link>
 
-// Hook
+// Hooks
 const { pathname, push, back } = useRouter();
-
-// Dynamic route params  (/blog/[slug])
 const { slug } = useParams();
+const q = useSearchParams().get('q');
+```
 
-// Query string  (/search?q=hello)
-const searchParams = useSearchParams();
-const q = searchParams.get('q');
+---
+
+## Imports
+
+```js
+// Absolute paths
+import Navbar    from '/components/Navbar.js';
+import connectDB from '/lib/db.js';
+
+// @/ alias
+import User from '@/models/User';
+
+// npm packages (install first, then import normally)
+import mongoose from 'mongoose';
+import bcrypt   from 'bcryptjs';
+import jwt      from 'jsonwebtoken';
 ```
 
 ---
 
 ## Full docs
 
-See [README.md](template/README.md) inside your generated project for the complete guide.
+See the [full README](template/README.md) for complete guides on hooks, API routes, database, authentication, and more.
 
 ---
 
@@ -224,4 +204,4 @@ See [README.md](template/README.md) inside your generated project for the comple
 
 ## License
 
-AZIZ
+MIT

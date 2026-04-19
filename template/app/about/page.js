@@ -1,6 +1,3 @@
-/** @jsx h */
-import { h } from '/_framework/runtime.js';
-
 // About page — route: /about
 export default function Page() {
     return (

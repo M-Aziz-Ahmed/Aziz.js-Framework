@@ -1,15 +1,12 @@
-/** @jsx h */
-import { h } from '/_framework/runtime.js';
-
-// navigate and useRouter are globals set by boot.js
+// navigate and useRouter are globals — no imports needed
 export default function Navbar() {
     const { pathname } = useRouter();
 
     const links = [
-        { href: '/',         label: 'Home'     },
-        { href: '/about',    label: 'About'    },
-        { href: '/test',     label: 'Test'     },
-        { href: '/contact',  label: 'Contact'  },
+        { href: '/',        label: 'Home'    },
+        { href: '/about',   label: 'About'   },
+        { href: '/test',    label: 'Test'    },
+        { href: '/contact', label: 'Contact' },
     ];
 
     return (

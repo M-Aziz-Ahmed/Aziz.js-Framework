@@ -1,11 +1,8 @@
-/** @jsx h */
-import { h } from '/_framework/runtime.js';
-
 // Test page — route: /test
 export default function Page() {
-    const [count, setCount]   = useState(0);
-    const [name, setName]     = useState('');
-    const [email, setEmail]   = useState('');
+    const [count, setCount] = useState(0);
+    const [name, setName]   = useState('');
+    const [email, setEmail] = useState('');
 
     const handleSubmit = (e) => {
         e.preventDefault();
@@ -30,15 +27,15 @@ export default function Page() {
                 <form onSubmit={handleSubmit}>
                     <input
                         type="text"
+                        placeholder="Your name"
                         value={name}
                         onInput={(e) => setName(e.target.value)}
-                        placeholder="Your name"
                     />
                     <input
                         type="email"
+                        placeholder="Your email"
                         value={email}
                         onInput={(e) => setEmail(e.target.value)}
-                        placeholder="Your email"
                     />
                     <button type="submit" class="btn btn-primary">Submit</button>
                 </form>

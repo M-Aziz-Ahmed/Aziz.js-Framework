@@ -1,6 +1,3 @@
-/** @jsx h */
-import { h } from '/_framework/runtime.js';
-
 // Home page — route: /
 export default function Page() {
     const [count, setCount] = useState(0);
@@ -40,7 +37,7 @@ export default function Page() {
                 <h2>Import Anything</h2>
                 <p>
                     Use <code>import</code> statements just like Next.js.
-                    The dev server resolves bare imports from <code>node_modules</code>.
+                    The dev server resolves bare imports from <code>node_modules</code> automatically.
                 </p>
                 <pre style={{ background: '#282c34', color: '#61dafb', padding: '16px', borderRadius: '8px', overflow: 'auto', fontSize: '13px' }}>
 {`import mongoose from 'mongoose';
