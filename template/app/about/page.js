@@ -1,6 +1,5 @@
 /** @jsx h */
 import { h } from '/_framework/runtime.js';
-import { navigate } from '/_framework/router.js';
 
 // About page — route: /about
 export default function Page() {

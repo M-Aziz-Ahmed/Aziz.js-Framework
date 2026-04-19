@@ -180,11 +180,9 @@ export const router = {
 
     async loadRoutes() {
         try {
-            // Dev server exposes the route manifest
             const res = await fetch('/_framework/routes.json');
             const manifest = await res.json();
 
-            // Dynamically import each page and layout
             for (const { pathname, filePath, type } of manifest) {
                 try {
                     const mod = await import(filePath + '?t=' + Date.now());
@@ -194,11 +192,11 @@ export const router = {
                         this.registerLayout(pathname, mod);
                     }
                 } catch (err) {
-                    console.error(`Failed to load ${filePath}:`, err);
+                    console.error(`❌ Failed to load ${filePath}:`, err);
                 }
             }
 
-            console.log(`📄 Loaded ${Object.keys(routes).length} routes`);
+            console.log(`📄 Loaded routes: ${Object.keys(routes).join(', ')}`);
         } catch (err) {
             console.error('Failed to load routes:', err);
         }
@@ -207,6 +205,9 @@ export const router = {
     async render() {
         const pathname = window.location.pathname;
         const root = document.getElementById('root');
+
+        // Find matching route
+        const match = resolveRoute(pathname);
 
         // Find matching route
         const match = resolveRoute(pathname);
