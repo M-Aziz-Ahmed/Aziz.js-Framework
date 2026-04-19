@@ -1,6 +1,5 @@
 # Development
 .vscode/
-node_modules/
 *.log
 
 # OS
@@ -14,3 +13,7 @@ pnpm-lock.yaml
 
 # Tests
 *.test.js
+
+# Never publish node_modules (including nested ones in template)
+node_modules/
+template/node_modules/
