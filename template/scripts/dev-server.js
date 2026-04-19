@@ -1,14 +1,44 @@
 #!/usr/bin/env node
 
-const fs   = require('fs');
-const path = require('path');
-const http = require('http');
+const fs     = require('fs');
+const path   = require('path');
+const http   = require('http');
 const crypto = require('crypto');
 
 const PORT = process.env.PORT || 3000;
 const ROOT = process.cwd();
 const clients = new Set();
 const apiHandlers = {};
+
+// ─── Babel JSX Transform ──────────────────────────────────────
+// Transform JSX → h() calls server-side before sending to browser
+
+let Babel;
+try {
+    Babel = require('@babel/standalone');
+} catch (e) {
+    console.warn('⚠️  @babel/standalone not found. Run: npm install --save-dev @babel/standalone');
+    Babel = null;
+}
+
+function transformJSX(code, filename) {
+    if (!Babel) return code;
+    try {
+        const result = Babel.transform(code, {
+            filename,
+            presets: [
+                ['react', { pragma: 'h', pragmaFrag: 'Fragment' }]
+            ],
+            plugins: [],
+            sourceType: 'module',
+        });
+        return result.code;
+    } catch (err) {
+        console.error(`❌ JSX transform error in ${filename}:`, err.message);
+        // Return error as a JS comment so browser shows it
+        return `throw new Error(${JSON.stringify('JSX transform error in ' + filename + ': ' + err.message)});`;
+    }
+}
 
 console.log('🚀 Aziz.js dev server starting...\n');
 
@@ -361,9 +391,11 @@ const server = http.createServer(async (req, res) => {
         const fileExt = path.extname(filePath).toLowerCase();
         const contentType = MIME[fileExt] || 'application/octet-stream';
 
-        // Transform JS/JSX files: rewrite imports
+        // Transform JS/JSX files: JSX → h() + rewrite imports
         if (fileExt === '.js' || fileExt === '.jsx' || fileExt === '.mjs') {
             let code = content.toString();
+            // Transform JSX first, then rewrite imports
+            code = transformJSX(code, path.basename(filePath));
             code = rewriteImports(code, filePath);
             content = Buffer.from(code);
         }

@@ -1,6 +1,6 @@
 {
   "name": "create-aziz-app",
-  "version": "3.0.2",
+  "version": "3.0.3",
   "description": "Create Aziz.js apps — lightweight Next.js clone with file-based routing, React hooks, and API routes",
   "keywords": [
     "aziz.js",
@@ -25,6 +25,9 @@
     "create-aziz-app": "bin/create-aziz-app.js"
   },
   "scripts": {
+    "preversion": "git add -A && git commit -m \"chore: pre-release changes\"",
+    "version": "git add -A",
+    "postversion": "git push && git push --tags",
     "dev": "cd template && node scripts/dev-server.js"
   }
 }
