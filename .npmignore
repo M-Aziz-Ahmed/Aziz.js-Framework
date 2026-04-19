@@ -1,0 +1,16 @@
+# Development
+.vscode/
+node_modules/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Lock files
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# Tests
+*.test.js

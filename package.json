@@ -1,0 +1,30 @@
+{
+  "name": "create-aziz-app",
+  "version": "3.0.2",
+  "description": "Create Aziz.js apps — lightweight Next.js clone with file-based routing, React hooks, and API routes",
+  "keywords": [
+    "aziz.js",
+    "nextjs",
+    "framework",
+    "cli",
+    "create-app",
+    "file-based-routing",
+    "react-hooks",
+    "api-routes",
+    "live-reload",
+    "lightweight"
+  ],
+  "license": "MIT",
+  "author": "Syed Muhammad Aziz Ahmed",
+  "type": "commonjs",
+  "files": [
+    "bin",
+    "template"
+  ],
+  "bin": {
+    "create-aziz-app": "bin/create-aziz-app.js"
+  },
+  "scripts": {
+    "dev": "cd template && node scripts/dev-server.js"
+  }
+}
