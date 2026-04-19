@@ -597,11 +597,26 @@ Edit `styles/globals.css` for global styles. Built-in utility classes:
 
 ### Tailwind CSS
 
-Choose Tailwind during project creation, or add it manually to `index.html`:
+Tailwind CSS is included by default via CDN with `primary` and `dark` colors pre-configured:
 
-```html
-<script src="https://cdn.tailwindcss.com"></script>
+```js
+// Use Tailwind classes directly in any file
+<div class="flex items-center gap-4 p-6 bg-white rounded-lg shadow">
+    <h1 class="text-2xl font-bold text-dark">Hello</h1>
+    <button class="bg-primary text-dark font-bold px-4 py-2 rounded-lg">
+        Click me
+    </button>
+</div>
 ```
+
+Custom colors available out of the box:
+
+| Class | Value |
+|-------|-------|
+| `bg-primary` / `text-primary` | `#61dafb` (cyan) |
+| `bg-dark` / `text-dark` | `#282c34` (dark) |
+
+To extend the config, edit the `tailwind.config` block in `index.html`.
 
 ---
 
