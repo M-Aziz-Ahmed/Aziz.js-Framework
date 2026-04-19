@@ -118,15 +118,19 @@ function matchRoute(pattern, pathname) {
 
 // Find the best matching route for a pathname
 function resolveRoute(pathname) {
+    // Normalize: treat '' and '/' the same
+    const normalized = pathname === '' ? '/' : pathname;
+
     // Exact match first
-    if (routes[pathname]) {
-        return { route: routes[pathname], params: {} };
+    const exact = routes[normalized];
+    if (exact !== undefined) {
+        return { route: exact, params: {} };
     }
 
-    // Pattern match
+    // Pattern match (dynamic segments like /blog/[slug])
     for (const pattern in routes) {
         if (pattern.includes('[')) {
-            const params = matchRoute(pattern, pathname);
+            const params = matchRoute(pattern, normalized);
             if (params !== null) {
                 return { route: routes[pattern], params };
             }
@@ -213,6 +217,7 @@ export const router = {
         // Find matching route
         const match = resolveRoute(pathname);
         console.log(`🔍 resolveRoute('${pathname}'):`, match);
+        console.log('📦 All registered routes:', Object.keys(routes));
 
         if (!match) {
             root.innerHTML = '';

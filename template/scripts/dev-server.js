@@ -86,25 +86,34 @@ function buildRouteManifest() {
 // Transforms: import X from '@/lib/db'  →  import X from '/lib/db.js'
 
 function rewriteImports(code, filePath) {
-    // Rewrite @/ alias to absolute path
-    code = code.replace(
-        /from\s+['"]@\/([^'"]+)['"]/g,
-        (_, p) => `from '/${p}'`
-    );
+    // Process line by line — only rewrite actual import/export statements
+    // This avoids corrupting string literals that contain import-like syntax
+    return code.split('\n').map(line => {
+        const trimmed = line.trimStart();
 
-    // Rewrite bare specifiers (not starting with /, ./, ../)
-    code = code.replace(
-        /from\s+['"]([^'"./][^'"]*)['"]/g,
-        (match, specifier) => `from '/_modules/${specifier}'`
-    );
+        // Only process lines that are import or export statements
+        if (!trimmed.startsWith('import ') && !trimmed.startsWith('export ')) {
+            return line;
+        }
 
-    // Same for dynamic imports
-    code = code.replace(
-        /import\s*\(\s*['"]([^'"./][^'"]*)['"]\s*\)/g,
+        // Rewrite @/ alias → absolute path
+        line = line.replace(
+            /from\s+['"]@\/([^'"]+)['"]/g,
+            (_, p) => `from '/${p}'`
+        );
+
+        // Rewrite bare specifiers (not starting with /, ./, ../)
+        line = line.replace(
+            /from\s+['"]([^'"./][^'"]*)['"]/g,
+            (_, specifier) => `from '/_modules/${specifier}'`
+        );
+
+        return line;
+    }).join('\n').replace(
+        // Dynamic imports can appear anywhere — but only rewrite bare specifiers
+        /\bimport\s*\(\s*['"]([^'"./][^'"]*)['"]\s*\)/g,
         (_, specifier) => `import('/_modules/${specifier}')`
     );
-
-    return code;
 }
 
 // ─── Module Resolver ─────────────────────────────────────────
