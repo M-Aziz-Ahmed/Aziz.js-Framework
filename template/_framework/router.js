@@ -209,9 +209,6 @@ export const router = {
         // Find matching route
         const match = resolveRoute(pathname);
 
-        // Find matching route
-        const match = resolveRoute(pathname);
-
         if (!match) {
             root.innerHTML = '';
             const notFound = h('div', { style: { padding: '40px', textAlign: 'center' } },
