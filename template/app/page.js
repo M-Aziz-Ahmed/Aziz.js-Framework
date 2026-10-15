@@ -4,7 +4,7 @@ export default function Page() {
 
     return (
         <div style={{ padding: '40px 32px', maxWidth: '900px', margin: '0 auto' }}>
-            <h1>Welcome Home 👋</h1>
+            <h1>Welcome to Aziz.js</h1>
 
             <div class="card">
                 <h2>Counter</h2>
