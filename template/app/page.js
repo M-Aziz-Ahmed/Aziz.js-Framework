@@ -23,9 +23,15 @@ export default function Page() {
                     Each <code>page.js</code> inside <code>app/</code> is a route — just like Next.js.
                     Create <code>app/about/page.js</code> and it becomes <code>/about</code>.
                 </p>
-                <div style={{ display: 'flex', gap: '12px' }}>
+                <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
                     <button class="btn btn-primary" onClick={() => navigate('/about')}>
                         Go to About →
+                    </button>
+                    <button class="btn btn-primary" onClick={() => navigate('/blog/hello-world')}>
+                        Blog Post →
+                    </button>
+                    <button class="btn btn-primary" onClick={() => navigate('/contact')}>
+                        Contact →
                     </button>
                     <button class="btn btn-primary" onClick={() => navigate('/test')}>
                         Go to Test →

@@ -1,54 +1,39 @@
 #!/usr/bin/env node
 
+// ============================================================
+//  Aziz.js Dev Server
+//  - Serves the app with server-side JSX transform (cached)
+//  - API routes: api/** and app/api/**/route.js
+//  - node_modules bare-import resolution (/_modules/…)
+//  - WebSocket live reload (development only)
+//  - Production mode: node scripts/dev-server.js --production
+// ============================================================
+
 const fs     = require('fs');
 const path   = require('path');
 const http   = require('http');
 const crypto = require('crypto');
 
-const PORT = process.env.PORT || 3000;
+const { hasBabel, transformModule, invalidate: invalidateTransform } = require('./lib/js-transform');
+const { resolveNodeModule } = require('./lib/module-resolver');
+const apiRouter = require('./lib/api-router');
+
+const PORT = parseInt(process.env.PORT, 10) || 3000;
 const ROOT = process.cwd();
+const PRODUCTION = process.argv.includes('--production') || process.env.NODE_ENV === 'production';
+
 const clients = new Set();
-const apiHandlers = {};
+let apiRoutes = [];
 
-// ─── Babel JSX Transform ──────────────────────────────────────
-// Transform JSX → h() calls server-side before sending to browser
-
-let Babel;
-try {
-    Babel = require('@babel/standalone');
-} catch (e) {
-    console.warn('⚠️  @babel/standalone not found. Run: npm install --save-dev @babel/standalone');
-    Babel = null;
+if (!hasBabel()) {
+    console.warn('⚠️  @babel/standalone not found — JSX files will not be compiled.');
+    console.warn('   Run: npm install --save-dev @babel/standalone');
 }
 
-function transformJSX(code, filename, filePath) {
-    if (!Babel) return code;
-    
-    // Skip framework internals — they have no JSX
-    if (filePath.includes('/_framework/') || filePath.includes('\\_framework\\')) {
-        return code;
-    }
-    
-    try {
-        const result = Babel.transform(code, {
-            filename,
-            presets: [
-                ['react', { pragma: 'h', pragmaFrag: 'Fragment' }]
-            ],
-            plugins: [],
-            sourceType: 'module',
-        });
-        return result.code;
-    } catch (err) {
-        console.error(`❌ JSX transform error in ${filename}:`, err.message);
-        return `throw new Error(${JSON.stringify('JSX transform error in ' + filename + ': ' + err.message)});`;
-    }
-}
-
-console.log('🚀 Aziz.js dev server starting...\n');
+console.log(`🚀 Aziz.js dev server starting${PRODUCTION ? ' (production mode)' : ''}...\n`);
 
 // ─── Route Manifest ──────────────────────────────────────────
-// Scans app/ folder and builds a list of pages and layouts
+// Scans app/ and builds the page/layout/not-found list for the client router.
 
 function buildRouteManifest() {
     const manifest = [];
@@ -62,7 +47,7 @@ function buildRouteManifest() {
             const fullPath = path.join(dir, entry.name);
 
             if (entry.isDirectory()) {
-                // Keep [slug] as-is — router.js matchRoute expects square bracket syntax
+                // Keep [slug] as-is — the router matcher expects bracket syntax
                 const segment = entry.name;
                 scan(fullPath, routeBase === '/' ? '/' + segment : routeBase + '/' + segment);
             } else if (entry.name === 'page.js' || entry.name === 'page.jsx') {
@@ -73,7 +58,12 @@ function buildRouteManifest() {
                 const pathname = routeBase || '/';
                 const filePath = '/app' + (pathname === '/' ? '' : pathname) + '/' + entry.name;
                 manifest.push({ type: 'layout', pathname, filePath });
+            } else if (entry.name === 'not-found.js' || entry.name === 'not-found.jsx') {
+                if (routeBase === '/') {
+                    manifest.push({ type: 'not-found', pathname: '/not-found', filePath: '/app/not-found.js' });
+                }
             }
+            // route.js files are API routes — handled by api-router, not the page router
         }
     }
 
@@ -81,237 +71,38 @@ function buildRouteManifest() {
     return manifest;
 }
 
-// ─── Bare Import Rewriter ─────────────────────────────────────
-// Transforms: import X from 'mongoose'  →  import X from '/_modules/mongoose'
-// Transforms: import X from '@/lib/db'  →  import X from '/lib/db.js'
+// ─── API routes ──────────────────────────────────────────────
 
-function rewriteImports(code, filePath) {
-    // Process line by line — only rewrite actual import/export statements
-    // This avoids corrupting string literals that contain import-like syntax
-    return code.split('\n').map(line => {
-        const trimmed = line.trimStart();
-
-        // Only process lines that are import or export statements
-        if (!trimmed.startsWith('import ') && !trimmed.startsWith('export ')) {
-            return line;
-        }
-
-        // Rewrite @/ alias → absolute path
-        line = line.replace(
-            /from\s+['"]@\/([^'"]+)['"]/g,
-            (_, p) => `from '/${p}'`
-        );
-
-        // Rewrite bare specifiers (not starting with /, ./, ../)
-        line = line.replace(
-            /from\s+['"]([^'"./][^'"]*)['"]/g,
-            (_, specifier) => `from '/_modules/${specifier}'`
-        );
-
-        return line;
-    }).join('\n').replace(
-        // Dynamic imports can appear anywhere — but only rewrite bare specifiers
-        /\bimport\s*\(\s*['"]([^'"./][^'"]*)['"]\s*\)/g,
-        (_, specifier) => `import('/_modules/${specifier}')`
-    );
+async function reloadApiRoutes(verbose = true) {
+    apiRouter.purgeProjectRequireCache(ROOT);
+    const { routes } = await apiRouter.loadApiRoutes(ROOT, { verbose });
+    apiRoutes = routes;
 }
 
-// ─── Module Resolver ─────────────────────────────────────────
-// Serves node_modules files for bare imports
-
-function resolveNodeModule(specifier) {
-    // Try to find the package in node_modules
-    const parts = specifier.split('/');
-    const pkgName = parts[0].startsWith('@') ? parts[0] + '/' + parts[1] : parts[0];
-    const subPath = parts[0].startsWith('@') ? parts.slice(2).join('/') : parts.slice(1).join('/');
-
-    const nodeModulesDir = path.join(ROOT, 'node_modules');
-
-    // Try package.json to find main/module entry
-    const pkgJsonPath = path.join(nodeModulesDir, pkgName, 'package.json');
-    if (!fs.existsSync(pkgJsonPath)) {
-        return null;
-    }
-
-    const pkg = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf8'));
-
-    if (subPath) {
-        // Specific file requested
-        const candidates = [
-            path.join(nodeModulesDir, pkgName, subPath),
-            path.join(nodeModulesDir, pkgName, subPath + '.js'),
-            path.join(nodeModulesDir, pkgName, subPath + '/index.js'),
-        ];
-        for (const c of candidates) {
-            if (fs.existsSync(c)) return c;
-        }
-        return null;
-    }
-
-    // Use module > browser > main priority
-    const entry = pkg.module || pkg.browser || pkg.main || 'index.js';
-    const entryPath = path.join(nodeModulesDir, pkgName, entry);
-    return fs.existsSync(entryPath) ? entryPath : null;
-}
-
-// ─── JSX Transform ───────────────────────────────────────────
-// Adds /** @jsx h */ pragma if file uses JSX and doesn't have it
-
-function ensureJsxPragma(code) {
-    if (code.includes('@jsx') || !code.includes('<')) return code;
-    // Simple heuristic: if it has JSX-like syntax, add pragma
-    if (/<[A-Z]|<[a-z]+[\s/>]/.test(code)) {
-        return '/** @jsx h */\n' + code;
-    }
-    return code;
-}
-
-// ─── API Route Loader ─────────────────────────────────────────
-
-function loadApiRoutes() {
-    const apiDir = path.join(ROOT, 'api');
-    if (!fs.existsSync(apiDir)) return;
-
-    const files = fs.readdirSync(apiDir).filter(f => f.endsWith('.js'));
-    console.log(`📡 Loading ${files.length} API route(s):`);
-
-    files.forEach(file => {
-        const routeName = path.basename(file, '.js');
-        const filePath  = path.join(apiDir, file);
-
-        try {
-            delete require.cache[require.resolve(filePath)];
-            const mod = require(filePath);
-
-            if (mod.GET || mod.POST || mod.PUT || mod.DELETE || mod.PATCH) {
-                const methods = {};
-                ['GET','POST','PUT','DELETE','PATCH'].forEach(m => { if (mod[m]) methods[m] = mod[m]; });
-                apiHandlers[routeName] = methods;
-                console.log(`   ✅ /api/${routeName} [${Object.keys(methods).join(', ')}]`);
-            } else {
-                const handler = mod.default || mod;
-                if (typeof handler === 'function') {
-                    apiHandlers[routeName] = handler;
-                    console.log(`   ✅ /api/${routeName}`);
-                }
-            }
-        } catch (err) {
-            console.error(`   ❌ /api/${routeName} — ${err.message}`);
-        }
-    });
-
-    console.log('');
-}
-
-// ─── Request Helpers ─────────────────────────────────────────
-
-function parseBody(req) {
-    return new Promise((resolve, reject) => {
-        let body = '';
-        req.on('data', c => body += c);
-        req.on('end', () => {
-            try {
-                resolve(body && req.headers['content-type']?.includes('application/json')
-                    ? JSON.parse(body) : body);
-            } catch { resolve(body); }
-        });
-        req.on('error', reject);
-    });
-}
-
-function parseQuery(url) {
-    const q = {};
-    const qs = url.split('?')[1];
-    if (qs) qs.split('&').forEach(p => {
-        const [k, v] = p.split('=');
-        q[decodeURIComponent(k)] = decodeURIComponent(v || '');
-    });
-    return q;
-}
-
-// ─── API Request Handler ──────────────────────────────────────
-
-async function handleApiRequest(req, res) {
-    const urlPath   = req.url.split('?')[0];
-    const routeName = urlPath.replace('/api/', '');
-    const handler   = apiHandlers[routeName];
-
-    if (!handler) {
-        res.writeHead(404, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: `API route /api/${routeName} not found` }));
-        return;
-    }
-
-    try {
-        const body  = await parseBody(req);
-        const query = parseQuery(req.url);
-
-        if (typeof handler === 'function') {
-            // Old style
-            const apiReq = { method: req.method, body, query, headers: req.headers, url: req.url };
-            const apiRes = {
-                statusCode: 200, headers: {},
-                status(c) { this.statusCode = c; return this; },
-                json(d) {
-                    res.writeHead(this.statusCode, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*', ...this.headers });
-                    res.end(JSON.stringify(d));
-                },
-                send(d) {
-                    res.writeHead(this.statusCode, { 'Content-Type': 'text/plain', 'Access-Control-Allow-Origin': '*', ...this.headers });
-                    res.end(d);
-                },
-                setHeader(k, v) { this.headers[k] = v; return this; }
-            };
-            await handler(apiReq, apiRes);
-        } else {
-            // New style: named exports
-            const methodFn = handler[req.method];
-            if (!methodFn) {
-                res.writeHead(405, { 'Content-Type': 'application/json', 'Allow': Object.keys(handler).join(', ') });
-                res.end(JSON.stringify({ error: 'Method not allowed', allowed: Object.keys(handler) }));
-                return;
-            }
-
-            const request = {
-                method: req.method,
-                headers: req.headers,
-                url: `http://localhost:${PORT}${req.url}`,
-                json: async () => body,
-                text: async () => typeof body === 'string' ? body : JSON.stringify(body)
-            };
-
-            const result = await methodFn(request);
-
-            if (result && result.body !== undefined) {
-                const headers = { 'Access-Control-Allow-Origin': '*', ...Object.fromEntries(result.headers || []) };
-                res.writeHead(result.status || 200, headers);
-                res.end(result.body);
-            }
-        }
-    } catch (err) {
-        console.error(`❌ API Error /api/${routeName}:`, err);
-        res.writeHead(500, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: err.message }));
-    }
-}
-
-// ─── HTTP Server ──────────────────────────────────────────────
+// ─── HTTP Server ─────────────────────────────────────────────
 
 const MIME = {
-    '.html': 'text/html',
-    '.js':   'text/javascript',
-    '.jsx':  'text/javascript',
-    '.mjs':  'text/javascript',
-    '.css':  'text/css',
-    '.json': 'application/json',
+    '.html': 'text/html; charset=utf-8',
+    '.js':   'text/javascript; charset=utf-8',
+    '.jsx':  'text/javascript; charset=utf-8',
+    '.mjs':  'text/javascript; charset=utf-8',
+    '.css':  'text/css; charset=utf-8',
+    '.json': 'application/json; charset=utf-8',
     '.png':  'image/png',
     '.jpg':  'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.gif':  'image/gif',
+    '.webp': 'image/webp',
     '.svg':  'image/svg+xml',
     '.ico':  'image/x-icon',
     '.woff': 'font/woff',
     '.woff2':'font/woff2',
     '.ttf':  'font/ttf',
+    '.map':  'application/json',
+    '.txt':  'text/plain; charset=utf-8',
 };
+
+const IMMUTABLE_EXTS = new Set(['.woff', '.woff2', '.ttf', '.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.ico']);
 
 const NO_CACHE = {
     'Cache-Control': 'no-cache, no-store, must-revalidate',
@@ -319,34 +110,58 @@ const NO_CACHE = {
     'Expires': '0'
 };
 
+function cacheHeadersFor(fileExt, isHtml) {
+    if (!PRODUCTION) return NO_CACHE;
+    if (isHtml || fileExt === '.json') {
+        return { 'Cache-Control': 'no-cache, must-revalidate' };
+    }
+    if (IMMUTABLE_EXTS.has(fileExt)) {
+        return { 'Cache-Control': 'public, max-age=86400, immutable' };
+    }
+    return { 'Cache-Control': 'no-cache, must-revalidate' };
+}
+
+function etagFor(stat) {
+    return `"${stat.mtimeMs.toString(36)}-${stat.size.toString(36)}"`;
+}
+
 const server = http.createServer(async (req, res) => {
-    const urlWithoutQuery = req.url.split('?')[0];
+    const rawUrl = req.url;
+    const urlWithoutQuery = rawUrl.split('?')[0];
 
-    // ── CORS preflight
-    if (req.method === 'OPTIONS') {
-        res.writeHead(200, { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type' });
-        res.end();
+    // ── API routes (api/** and app/api/**/route.js)
+    if (urlWithoutQuery === '/api' || urlWithoutQuery.startsWith('/api/')) {
+        await apiRouter.handleApiRequest(req, res, { routes: apiRoutes, port: server.address()?.port || PORT });
         return;
     }
 
-    // ── API routes
-    if (urlWithoutQuery.startsWith('/api/')) {
-        await handleApiRequest(req, res);
-        return;
-    }
-
-    // ── Route manifest (used by router.js to discover pages)
+    // ── Route manifest (used by the client router to discover pages)
     if (urlWithoutQuery === '/_framework/routes.json') {
         const manifest = buildRouteManifest();
-        res.writeHead(200, { 'Content-Type': 'application/json', ...NO_CACHE });
-        res.end(JSON.stringify(manifest));
+        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', ...NO_CACHE });
+        res.end(JSON.stringify({ dev: !PRODUCTION, routes: manifest }));
+        return;
+    }
+
+    // ── In production, neutralize the live-reload client (no WS server)
+    if (PRODUCTION && urlWithoutQuery === '/scripts/live-reload-client.js') {
+        res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'public, max-age=86400' });
+        res.end('/* live reload disabled in production */\n');
         return;
     }
 
     // ── node_modules bare imports: /_modules/mongoose → node_modules/mongoose
     if (urlWithoutQuery.startsWith('/_modules/')) {
-        const specifier = urlWithoutQuery.slice('/_modules/'.length);
-        const filePath  = resolveNodeModule(specifier);
+        let specifier;
+        try {
+            specifier = decodeURIComponent(urlWithoutQuery.slice('/_modules/'.length));
+        } catch {
+            res.writeHead(400, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ error: 'Malformed module specifier' }));
+            return;
+        }
+
+        const filePath = resolveNodeModule(specifier, ROOT);
 
         if (!filePath) {
             res.writeHead(404, { 'Content-Type': 'application/json' });
@@ -355,9 +170,14 @@ const server = http.createServer(async (req, res) => {
         }
 
         try {
+            const stat = fs.statSync(filePath);
             let code = fs.readFileSync(filePath, 'utf8');
-            code = rewriteImports(code, filePath);
-            res.writeHead(200, { 'Content-Type': 'text/javascript', ...NO_CACHE });
+            code = transformModule(code, filePath, stat.mtimeMs);
+            res.writeHead(200, {
+                'Content-Type': 'text/javascript; charset=utf-8',
+                ...cacheHeadersFor('.js', false),
+                'ETag': etagFor(stat),
+            });
             res.end(code);
         } catch (err) {
             res.writeHead(500);
@@ -366,27 +186,53 @@ const server = http.createServer(async (req, res) => {
         return;
     }
 
-    // ── Static files
+    // ── Static files + SPA fallback
     let filePath;
 
-    // Root → index.html
-    if (urlWithoutQuery === '/' || urlWithoutQuery === '') {
-        filePath = path.join(ROOT, 'index.html');
-    } else {
-        filePath = path.join(ROOT, urlWithoutQuery);
-
-        // SPA fallback: path with no file extension → serve index.html
-        // so the client-side router handles it
-        const ext = path.extname(urlWithoutQuery);
-        if (!ext) {
+    try {
+        if (urlWithoutQuery === '/' || urlWithoutQuery === '') {
             filePath = path.join(ROOT, 'index.html');
+        } else {
+            let decoded;
+            try {
+                decoded = decodeURIComponent(urlWithoutQuery);
+            } catch {
+                res.writeHead(400, { 'Content-Type': 'text/plain' });
+                res.end('Bad request');
+                return;
+            }
+
+            // Security: resolve and CONFINE to the project root (blocks path traversal)
+            const resolved = path.resolve(ROOT, '.' + (decoded.startsWith('/') ? decoded : '/' + decoded));
+            const rootResolved = path.resolve(ROOT);
+            if (resolved !== rootResolved && !resolved.startsWith(rootResolved + path.sep)) {
+                res.writeHead(403, { 'Content-Type': 'text/plain' });
+                res.end('Forbidden');
+                return;
+            }
+            filePath = resolved;
+
+            // SPA fallback: path with no file extension → serve index.html
+            // so the client-side router handles it
+            const ext = path.extname(filePath);
+            if (!ext && !fs.existsSync(filePath)) {
+                filePath = path.join(ROOT, 'index.html');
+            }
         }
+    } catch {
+        res.writeHead(400, { 'Content-Type': 'text/plain' });
+        res.end('Bad request');
+        return;
     }
 
     if (!fs.existsSync(filePath)) {
-        // Try appending .js
+        // Try appending .js / .jsx (import specifiers without extension)
         if (fs.existsSync(filePath + '.js')) {
             filePath = filePath + '.js';
+        } else if (fs.existsSync(filePath + '.jsx')) {
+            filePath = filePath + '.jsx';
+        } else if (path.extname(filePath) === '' && fs.existsSync(path.join(ROOT, 'index.html'))) {
+            filePath = path.join(ROOT, 'index.html');
         } else {
             res.writeHead(404, { 'Content-Type': 'text/plain' });
             res.end('Not found: ' + urlWithoutQuery);
@@ -395,19 +241,32 @@ const server = http.createServer(async (req, res) => {
     }
 
     try {
-        let content = fs.readFileSync(filePath);
+        const stat = fs.statSync(filePath);
         const fileExt = path.extname(filePath).toLowerCase();
+        const isHtml = fileExt === '.html';
         const contentType = MIME[fileExt] || 'application/octet-stream';
+        const headers = {
+            'Content-Type': contentType,
+            ...cacheHeadersFor(fileExt, isHtml),
+            'ETag': etagFor(stat),
+        };
 
-        // Transform JS/JSX files: JSX → h() + rewrite imports
+        // Conditional request → 304
+        if (req.headers['if-none-match'] === headers.ETag) {
+            res.writeHead(304, headers);
+            res.end();
+            return;
+        }
+
+        let content = fs.readFileSync(filePath);
+
+        // Transform JS/JSX: JSX → h() + rewrite imports (mtime-cached)
         if (fileExt === '.js' || fileExt === '.jsx' || fileExt === '.mjs') {
-            let code = content.toString();
-            code = transformJSX(code, path.basename(filePath), filePath);
-            code = rewriteImports(code, filePath);
+            const code = transformModule(content.toString(), filePath, stat.mtimeMs);
             content = Buffer.from(code);
         }
 
-        res.writeHead(200, { 'Content-Type': contentType, ...NO_CACHE });
+        res.writeHead(200, headers);
         res.end(content);
     } catch (err) {
         res.writeHead(500);
@@ -415,76 +274,97 @@ const server = http.createServer(async (req, res) => {
     }
 });
 
-// ─── WebSocket (live reload) ──────────────────────────────────
+// ─── WebSocket (live reload, development only) ───────────────
 
-server.on('upgrade', (req, socket) => {
-    const key = req.headers['sec-websocket-key'];
-    const accept = crypto.createHash('sha1')
-        .update(key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11')
-        .digest('base64');
+if (!PRODUCTION) {
+    server.on('upgrade', (req, socket) => {
+        const key = req.headers['sec-websocket-key'];
+        if (!key) { socket.destroy(); return; }
+        const accept = crypto.createHash('sha1')
+            .update(key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11')
+            .digest('base64');
 
-    socket.write(
-        'HTTP/1.1 101 Switching Protocols\r\n' +
-        'Upgrade: websocket\r\nConnection: Upgrade\r\n' +
-        `Sec-WebSocket-Accept: ${accept}\r\n\r\n`
-    );
+        socket.write(
+            'HTTP/1.1 101 Switching Protocols\r\n' +
+            'Upgrade: websocket\r\nConnection: Upgrade\r\n' +
+            `Sec-WebSocket-Accept: ${accept}\r\n\r\n`
+        );
 
-    const client = {
-        send(msg) {
-            const buf = Buffer.from(msg);
-            const frame = Buffer.alloc(buf.length + 2);
-            frame[0] = 0x81; frame[1] = buf.length;
-            buf.copy(frame, 2);
-            socket.write(frame);
-        }
-    };
+        const client = {
+            send(msg) {
+                const buf = Buffer.from(msg);
+                if (buf.length > 125) return; // control messages are tiny
+                const frame = Buffer.alloc(buf.length + 2);
+                frame[0] = 0x81;
+                frame[1] = buf.length;
+                buf.copy(frame, 2);
+                socket.write(frame);
+            }
+        };
 
-    clients.add(client);
-    console.log(`🔌 Browser connected (${clients.size} total)`);
+        clients.add(client);
+        console.log(`🔌 Browser connected (${clients.size} total)`);
 
-    socket.on('close', () => { clients.delete(client); });
-    socket.on('error', () => { clients.delete(client); });
-});
+        socket.on('close', () => { clients.delete(client); });
+        socket.on('error', () => { clients.delete(client); });
+    });
+}
 
 function notifyClients() {
+    if (clients.size === 0) return;
     console.log(`🔄 Reloading ${clients.size} browser(s)...`);
     clients.forEach(c => { try { c.send('reload'); } catch { clients.delete(c); } });
 }
 
-// ─── File Watcher ─────────────────────────────────────────────
+// ─── File Watcher (development only) ─────────────────────────
 
 const watchDirs = ['app', 'api', 'components', 'lib', 'models', 'styles', '_framework'];
+const SERVER_CODE_DIRS = new Set(['api', 'lib', 'models']);
 let reloadTimer = null;
 
-console.log('👀 Watching:');
-watchDirs.forEach(dir => {
-    const full = path.join(ROOT, dir);
-    if (!fs.existsSync(full)) return;
-    console.log(`   - ${dir}/`);
+if (!PRODUCTION) {
+    console.log('👀 Watching:');
+    watchDirs.forEach(dir => {
+        const full = path.join(ROOT, dir);
+        if (!fs.existsSync(full)) return;
+        console.log(`   - ${dir}/`);
 
-    fs.watch(full, { recursive: true }, (_, filename) => {
-        if (!filename) return;
-        const ext = path.extname(filename);
-        if (!['.js', '.jsx', '.css', '.json'].includes(ext)) return;
+        try {
+            fs.watch(full, { recursive: true }, (_, filename) => {
+                if (!filename) return;
+                const ext = path.extname(filename);
+                if (!['.js', '.jsx', '.mjs', '.css', '.json'].includes(ext)) return;
 
-        console.log(`\n📝 Changed: ${dir}/${filename}`);
-        clearTimeout(reloadTimer);
+                console.log(`\n📝 Changed: ${dir}/${filename}`);
 
-        if (dir === 'api') {
-            loadApiRoutes();
+                // Keep the transform cache fresh
+                invalidateTransform(path.join(full, filename));
+
+                if (SERVER_CODE_DIRS.has(dir)) {
+                    // API routes may import from lib/ and models/ — reload them
+                    clearTimeout(reloadTimer);
+                    reloadTimer = setTimeout(() => {
+                        reloadApiRoutes(false).then(notifyClients);
+                    }, 200);
+                    return;
+                }
+
+                clearTimeout(reloadTimer);
+                reloadTimer = setTimeout(notifyClients, 300);
+            });
+        } catch (err) {
+            console.warn(`   ⚠️ Could not watch ${dir}/: ${err.message}`);
         }
-
-        reloadTimer = setTimeout(notifyClients, 300);
     });
-});
+}
 
 // ─── Start ────────────────────────────────────────────────────
 
 function startServer(port) {
     server.listen(port, () => {
-        console.log(`\n✅ Dev server running!`);
-        console.log(`🌐 http://localhost:${port}/\n`);
-        console.log('⏹️  Ctrl+C to stop\n');
+        console.log(`\n✅ Server running!`);
+        console.log(`🌐 http://localhost:${port}/`);
+        console.log(PRODUCTION ? '⏹️  Ctrl+C to stop\n' : '⏹️  Ctrl+C to stop\n');
     }).on('error', err => {
         if (err.code === 'EADDRINUSE') {
             console.log(`⚠️  Port ${port} busy, trying ${port + 1}...`);
@@ -495,6 +375,7 @@ function startServer(port) {
     });
 }
 
-loadApiRoutes();
-startServer(PORT);
-process.stdin.resume();
+reloadApiRoutes().then(() => startServer(PORT)).catch(err => {
+    console.error('❌ Failed to load API routes:', err);
+    startServer(PORT);
+});

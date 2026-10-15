@@ -1,10 +1,11 @@
 // ============================================================
 //  Aziz.js Router
-//  File-based routing like Next.js App Router
+//  File-based routing like the Next.js App Router.
 //
 //  app/
 //    layout.js          → root layout (wraps everything)
 //    page.js            → /
+//    not-found.js       → custom 404
 //    about/
 //      page.js          → /about
 //      layout.js        → layout for /about and children
@@ -13,301 +14,248 @@
 //        page.js        → /blog/:slug
 // ============================================================
 
-import { h, render } from '/_framework/runtime.js';
-import { prepareHooks, finishHooks, resetHooks } from '/_framework/hooks.js';
+import { h, mountPage, disposeFibers, beginRender, materialize, appendNodes } from '/_framework/runtime.js';
+import { normalizePath, resolveRoute, collectLayouts } from '/_framework/route-match.js';
 
-// All registered routes (populated by dev server scan)
+// Registered routes / layouts (populated by the dev server manifest)
 const routes = {};
+const layouts = [];
+let notFoundModule = null;
+let dev = true;
 
-// Current fiber tree for hooks
-const fibers = new Map();
+// ─── Navigation ──────────────────────────────────────────────
 
-function getFiber(id) {
-    if (!fibers.has(id)) {
-        fibers.set(id, { hooks: [] });
-    }
-    return fibers.get(id);
-}
-
-// Wrap a component so hooks work correctly
-function withHooks(id, Component) {
-    return function WrappedComponent(props) {
-        const fiber = getFiber(id);
-        prepareHooks(fiber);
-        const result = Component(props);
-        finishHooks();
-        return result;
-    };
-}
-
-// Navigate to a path
 export function navigate(path) {
     history.pushState(null, '', path);
     router.render();
 }
 
-// Link component (like Next.js <Link>)
-export function Link({ href, children, className, style }) {
+// <Link href="/about">About</Link>
+export function Link({ href, children, className, style, onClick, ...rest }) {
     return h('a', {
+        ...rest,
         href,
         class: className,
         style,
         onClick: (e) => {
+            if (typeof onClick === 'function') onClick(e);
+            if (e.defaultPrevented) return;
+            // Respect modifier clicks, middle-click, external links
+            if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+            if (!href || /^([a-z]+:)?\/\//i.test(href) || href.startsWith('#') || href.startsWith('mailto:')) return;
             e.preventDefault();
             navigate(href);
-        }
+        },
     }, ...(Array.isArray(children) ? children : [children]));
 }
 
-// useRouter hook
+// ─── Router hooks ────────────────────────────────────────────
+
 export function useRouter() {
     return {
-        pathname: window.location.pathname,
+        pathname: normalizePath(window.location.pathname),
         push: navigate,
+        replace: (path) => { history.replaceState(null, '', path); router.render(); },
         back: () => history.back(),
         forward: () => history.forward(),
-        params: router.currentParams || {}
+        refresh: () => router.render(),
+        params: router.currentParams || {},
     };
 }
 
-// useParams hook
 export function useParams() {
     return router.currentParams || {};
 }
 
-// useSearchParams hook
 export function useSearchParams() {
     const params = new URLSearchParams(window.location.search);
     return {
         get: (key) => params.get(key),
         getAll: (key) => params.getAll(key),
         has: (key) => params.has(key),
-        toString: () => params.toString()
+        entries: () => params.entries(),
+        toString: () => params.toString(),
     };
 }
 
-// Match a route pattern to a pathname
-// Supports: /about, /blog/[slug], /blog/[...slug]
-function matchRoute(pattern, pathname) {
-    const patternParts = pattern.split('/').filter(Boolean);
-    const pathParts    = pathname.split('/').filter(Boolean);
-    const params = {};
+// ─── Default 404 ─────────────────────────────────────────────
 
-    // Catch-all: /blog/[...slug]
-    const catchAll = patternParts.findIndex(p => p.startsWith('[...'));
-    if (catchAll !== -1) {
-        if (pathParts.length < catchAll) return null;
-        const paramName = patternParts[catchAll].slice(4, -1);
-        params[paramName] = pathParts.slice(catchAll);
-        return params;
+function DefaultNotFound() {
+    return h('div', { style: { padding: '60px 24px', textAlign: 'center' } },
+        h('h1', { style: { fontSize: '72px', color: '#61dafb', margin: '0 0 8px' } }, '404'),
+        h('p', { style: { color: '#666', marginBottom: '24px' } }, 'This page could not be found.'),
+        h('button', {
+            class: 'btn btn-primary',
+            style: { padding: '10px 24px', cursor: 'pointer' },
+            onClick: () => navigate('/'),
+        }, 'Go Home')
+    );
+}
+
+// ─── Focus preservation ──────────────────────────────────────
+
+function captureFocus() {
+    const el = document.activeElement;
+    if (!el || el === document.body) return null;
+    if (!/^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName || '')) return null;
+    return {
+        id: el.id || null,
+        name: el.getAttribute?.('name') || null,
+        placeholder: el.getAttribute?.('placeholder') || null,
+        tag: el.tagName,
+        start: el.selectionStart ?? null,
+        end: el.selectionEnd ?? null,
+    };
+}
+
+function restoreFocus(root, saved) {
+    if (!saved) return;
+    let el = null;
+    if (saved.id) el = root.querySelector(`#${CSS.escape(saved.id)}`);
+    if (!el && saved.name) el = root.querySelector(`[name="${CSS.escape(saved.name)}"]`);
+    if (!el && saved.placeholder) {
+        el = root.querySelector(`${saved.tag.toLowerCase()}[placeholder="${CSS.escape(saved.placeholder)}"]`);
     }
-
-    if (patternParts.length !== pathParts.length) return null;
-
-    for (let i = 0; i < patternParts.length; i++) {
-        if (patternParts[i].startsWith('[') && patternParts[i].endsWith(']')) {
-            // Dynamic segment
-            params[patternParts[i].slice(1, -1)] = pathParts[i];
-        } else if (patternParts[i] !== pathParts[i]) {
-            return null;
+    if (el && typeof el.focus === 'function') {
+        el.focus({ preventScroll: true });
+        if (saved.start !== null && typeof el.setSelectionRange === 'function') {
+            try { el.setSelectionRange(saved.start, saved.end); } catch { /* non-text input */ }
         }
     }
-
-    return params;
 }
 
-// Find the best matching route for a pathname
-function resolveRoute(pathname) {
-    // Normalize: treat '' and '/' the same
-    const normalized = pathname === '' ? '/' : pathname;
+// ─── Metadata ────────────────────────────────────────────────
 
-    // Exact match first
-    const exact = routes[normalized];
-    if (exact !== undefined) {
-        return { route: exact, params: {} };
-    }
+function metaTitle(value) {
+    if (typeof value === 'string') return value;
+    if (value && typeof value === 'object') return value.absolute || value.default || '';
+    return '';
+}
 
-    // Pattern match (dynamic segments like /blog/[slug])
-    for (const pattern in routes) {
-        if (pattern.includes('[')) {
-            const params = matchRoute(pattern, normalized);
-            if (params !== null) {
-                return { route: routes[pattern], params };
-            }
+function applyMetadata(layoutModules, pageModule) {
+    // Outer → inner; page metadata wins last.
+    const metas = [...layoutModules.map(m => m && m.metadata), pageModule && pageModule.metadata]
+        .filter(Boolean);
+    if (metas.length === 0) return;
+
+    const merged = Object.assign({}, ...metas);
+
+    const title = metaTitle(merged.title);
+    if (title) document.title = title;
+
+    if (merged.description) {
+        let tag = document.querySelector('meta[name="description"]');
+        if (!tag) {
+            tag = document.createElement('meta');
+            tag.setAttribute('name', 'description');
+            document.head.appendChild(tag);
         }
+        tag.setAttribute('content', merged.description);
     }
-
-    return null;
 }
 
-// Collect layout chain for a path
-// /about/team → [app/layout.js, app/about/layout.js]
-function getLayoutChain(pathname) {
-    return router.layouts.filter(({ path }) => {
-        if (path === '/') return true;
-        return pathname === path || pathname.startsWith(path + '/');
-    }).sort((a, b) => a.path.length - b.path.length);
-}
+// ─── Router object ───────────────────────────────────────────
 
 export const router = {
-    layouts: [],
+    layouts,
     currentParams: {},
+    _lastPathname: null,
 
-    // Register a route (called by dev server scan result)
     register(pathname, module) {
         routes[pathname] = module;
     },
 
-    // Register a layout
     registerLayout(pathname, module) {
-        this.layouts.push({ path: pathname, module });
+        layouts.push({ path: pathname, module });
+    },
+
+    registerNotFound(module) {
+        notFoundModule = module;
     },
 
     async init() {
-        // Expose globals
-        window.navigate   = navigate;
-        window.useRouter  = useRouter;
-        window.useParams  = useParams;
+        window.navigate = navigate;
+        window.useRouter = useRouter;
+        window.useParams = useParams;
         window.useSearchParams = useSearchParams;
-        window.Link       = Link;
+        window.Link = Link;
         window.__rerenderPage = () => this.render();
 
-        // Load routes from server
         await this.loadRoutes();
 
-        // Handle browser back/forward
         window.addEventListener('popstate', () => this.render());
 
-        // Initial render
         await this.render();
     },
 
     async loadRoutes() {
+        let manifest;
         try {
             const res = await fetch('/_framework/routes.json');
-            const manifest = await res.json();
-
-            console.log('📋 Route manifest:', manifest);
-
-            for (const { pathname, filePath, type } of manifest) {
-                try {
-                    const mod = await import(filePath + '?t=' + Date.now());
-                    if (type === 'page') {
-                        this.register(pathname, mod);
-                        console.log(`✅ Registered page: ${pathname} → ${filePath}`);
-                    } else if (type === 'layout') {
-                        this.registerLayout(pathname, mod);
-                        console.log(`✅ Registered layout: ${pathname} → ${filePath}`);
-                    }
-                } catch (err) {
-                    console.error(`❌ Failed to load ${filePath}:`, err);
-                }
-            }
-
-            console.log(`📄 Loaded routes: ${Object.keys(routes).join(', ')}`);
+            const data = await res.json();
+            manifest = Array.isArray(data) ? data : data.routes || [];
+            dev = Array.isArray(data) ? true : data.dev !== false;
+            window.__azizDev = dev;
         } catch (err) {
-            console.error('Failed to load routes:', err);
+            console.error('❌ Failed to load route manifest:', err);
+            return;
+        }
+
+        for (const entry of manifest) {
+            const { pathname, filePath, type } = entry;
+            try {
+                // Cache-bust in development; allow HTTP caching in production
+                const url = dev ? filePath + '?t=' + Date.now() : filePath;
+                const mod = await import(url);
+                if (type === 'page') this.register(pathname, mod);
+                else if (type === 'layout') this.registerLayout(pathname, mod);
+                else if (type === 'not-found') this.registerNotFound(mod);
+            } catch (err) {
+                console.error(`❌ Failed to load ${filePath}:`, err);
+            }
         }
     },
 
     async render() {
-        const pathname = window.location.pathname;
+        const pathname = normalizePath(window.location.pathname);
         const root = document.getElementById('root');
+        if (!root) return;
 
-        // Find matching route
-        const match = resolveRoute(pathname);
-        console.log(`🔍 resolveRoute('${pathname}'):`, match);
-        console.log('📦 All registered routes:', Object.keys(routes));
-
-        if (!match) {
-            root.innerHTML = '';
-            const notFound = h('div', { style: { padding: '40px', textAlign: 'center' } },
-                h('h1', { style: { fontSize: '80px', color: '#61dafb' } }, '404'),
-                h('p', {}, 'Page not found'),
-                h('button', {
-                    style: { padding: '10px 24px', cursor: 'pointer' },
-                    onClick: () => navigate('/')
-                }, 'Go Home')
-            );
-            root.appendChild(notFound);
-            return;
+        const isNewRoute = this._lastPathname !== pathname;
+        if (isNewRoute) {
+            // Unmount previous page: run effect cleanups, drop state
+            disposeFibers();
+            this._lastPathname = pathname;
         }
 
-        this.currentParams = match.params;
+        const scrollY = isNewRoute ? 0 : window.scrollY;
 
-        const { route } = match;
-        const PageComponent = route.default;
+        const match = resolveRoute(routes, pathname);
+        this.currentParams = match ? match.params : {};
+
+        const layoutChain = collectLayouts(layouts, pathname);
+        const layoutModules = layoutChain.map(l => l.module);
+        const layoutComponents = layoutModules.map(m => m.default).filter(Boolean);
+
+        let pageModule = match ? match.value : notFoundModule;
+        let PageComponent = pageModule && pageModule.default;
 
         if (!PageComponent) {
-            console.error(`Route has no default export: ${pathname}`);
-            return;
+            PageComponent = DefaultNotFound;
+            pageModule = null;
         }
 
-        // Get layout chain
-        const layoutChain = getLayoutChain(pathname);
+        applyMetadata(layoutModules, pageModule);
 
-        // Wrap page in layouts (innermost first, outermost last)
-        let content = () => {
-            const fiber = getFiber('page:' + pathname);
-            prepareHooks(fiber);
-            const result = PageComponent({});
-            finishHooks();
-            return result;
-        };
+        const saved = captureFocus();
 
-        // Apply layouts from innermost to outermost
-        for (let i = layoutChain.length - 1; i >= 0; i--) {
-            const { module: layoutMod, path: layoutPath } = layoutChain[i];
-            const LayoutComponent = layoutMod.default;
-            if (!LayoutComponent) continue;
+        mountPage(PageComponent, layoutComponents, root, 'page:' + pathname);
 
-            const innerContent = content;
-            content = () => {
-                const fiber = getFiber('layout:' + layoutPath);
-                prepareHooks(fiber);
-                const result = LayoutComponent({ children: innerContent() });
-                finishHooks();
-                return result;
-            };
-        }
+        restoreFocus(root, saved);
 
-        // Render — preserve focus so inputs don't lose cursor on state update
-        const activeEl = document.activeElement;
-        const activeId = activeEl?.id || null;
-        const activeName = activeEl?.getAttribute?.('name') || null;
-        const activePlaceholder = activeEl?.getAttribute?.('placeholder') || null;
-        const activeTag = activeEl?.tagName || null;
-        const activeCursorStart = activeEl?.selectionStart ?? null;
-        const activeCursorEnd = activeEl?.selectionEnd ?? null;
-
-        root.innerHTML = '';
-        const tree = content();
-        if (Array.isArray(tree)) {
-            tree.forEach(node => {
-                if (node instanceof Node) root.appendChild(node);
-            });
-        } else if (tree instanceof Node) {
-            root.appendChild(tree);
-        }
-
-        // Restore focus to the previously active input
-        let restored = null;
-        if (activeId) {
-            restored = root.querySelector(`#${CSS.escape(activeId)}`);
-        }
-        if (!restored && activeName) {
-            restored = root.querySelector(`[name="${activeName}"]`);
-        }
-        if (!restored && activePlaceholder && activeTag) {
-            restored = root.querySelector(`${activeTag.toLowerCase()}[placeholder="${activePlaceholder}"]`);
-        }
-        if (restored && typeof restored.focus === 'function') {
-            restored.focus();
-            if (activeCursorStart !== null && restored.setSelectionRange) {
-                try { restored.setSelectionRange(activeCursorStart, activeCursorEnd); } catch {}
-            }
-        }
-    }
+        if (isNewRoute) window.scrollTo(0, 0);
+        else if (scrollY) window.scrollTo(0, scrollY);
+    },
 };
 
 export default router;

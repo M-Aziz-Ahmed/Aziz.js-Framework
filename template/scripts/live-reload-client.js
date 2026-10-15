@@ -23,11 +23,12 @@
     let ws;
     let reconnectAttempts = 0;
     const maxReconnectAttempts = 10;
-    const port = window.location.port || 3000;
+    const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+    const wsHost = window.location.host || `localhost:${window.location.port || 3000}`;
     function connect() {
         try {
             console.log('🔌 Connecting to live reload WebSocket...');
-            ws = new WebSocket(`ws://localhost:${port}`);
+            ws = new WebSocket(`${protocol}://${wsHost}`);
 
             ws.onopen = function() {
                 console.log('✅ Live reload connected');

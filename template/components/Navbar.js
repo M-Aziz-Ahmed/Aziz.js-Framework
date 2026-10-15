@@ -3,10 +3,11 @@ export default function Navbar() {
     const { pathname } = useRouter();
 
     const links = [
-        { href: '/',        label: 'Home'    },
-        { href: '/about',   label: 'About'   },
-        { href: '/test',    label: 'Test'    },
-        { href: '/contact', label: 'Contact' },
+        { href: '/',                 label: 'Home'    },
+        { href: '/about',            label: 'About'   },
+        { href: '/blog/hello-world', label: 'Blog'    },
+        { href: '/test',             label: 'Test'    },
+        { href: '/contact',          label: 'Contact' },
     ];
 
     return (
@@ -14,6 +15,7 @@ export default function Navbar() {
             <span class="brand" onClick={() => navigate('/')}>⚡ Aziz.js</span>
             {links.map(({ href, label }) =>
                 <a
+                    key={href}
                     href={href}
                     class={pathname === href ? 'active' : ''}
                     onClick={(e) => { e.preventDefault(); navigate(href); }}
