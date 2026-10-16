@@ -42,15 +42,25 @@ function isFrameworkPath(filePath) {
 
 function transformJSX(code, filename) {
     if (!Babel) throw new Error(BABEL_MISSING_MESSAGE);
+
+    const presets = [];
+    const lower = String(filename).toLowerCase();
+
+    // TypeScript: strip types before JSX so `<Foo<T> />` and generics in
+    // expressions parse. isTSX must match the real extension.
+    if (/\.tsx?$/.test(lower) || /\.mtsx?$/.test(lower)) {
+        presets.push(['typescript', { isTSX: lower.endsWith('tsx'), allExtensions: true }]);
+    }
+
+    // runtime: 'classic' is required. Babel 8 defaults to the automatic
+    // runtime, which rejects an explicit pragma ("pragma and pragmaFrag
+    // cannot be set when runtime is automatic"). We compile to the
+    // global `h`/`Fragment` that boot.js installs, not to jsx-runtime.
+    presets.push(['react', { runtime: 'classic', pragma: 'h', pragmaFrag: 'Fragment' }]);
+
     const result = Babel.transform(code, {
         filename,
-        presets: [
-            // runtime: 'classic' is required. Babel 8 defaults to the automatic
-            // runtime, which rejects an explicit pragma ("pragma and pragmaFrag
-            // cannot be set when runtime is automatic"). We compile to the
-            // global `h`/`Fragment` that boot.js installs, not to jsx-runtime.
-            ['react', { runtime: 'classic', pragma: 'h', pragmaFrag: 'Fragment' }]
-        ],
+        presets,
         plugins: [],
         sourceType: 'module',
     });

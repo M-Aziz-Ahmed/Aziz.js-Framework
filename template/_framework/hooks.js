@@ -36,8 +36,11 @@ export function initHooks() {
     window.useContext      = useContext;
     window.createContext   = createContext;
     window.useLocalStorage = useLocalStorage;
-    window.useFetch        = useFetch;
+window.useFetch          = useFetch;
     window.useApi          = useFetch;
+    window.createResource  = createResource;
+    window.fetchResource   = fetchResource;
+    window.use             = use;
     window.onLoadState     = onLoadState;
     window.getPendingLoads = getPendingLoads;
     window.clearFetchCache = clearFetchCache;
@@ -263,10 +266,37 @@ export function clearFetchCache() {
     responseCache.clear();
 }
 
+// Warm the cache ahead of a navigation (used by <Link prefetch>).
+export async function warmCache(url) {
+    const key = 'GET:' + url;
+    const hit = responseCache.get(key);
+    if (hit && Date.now() - hit.at < CACHE_TTL) return hit.data;
+    try {
+        const res = await fetch(url, { headers: { 'x-aziz-prefetch': '1' } });
+        if (!res.ok) return null;
+        const type = (res.headers.get('content-type') || '').toLowerCase();
+        const data = type.includes('application/json') ? await res.json() : await res.text();
+        responseCache.set(key, { data, status: res.status, at: Date.now() });
+        return data;
+    } catch {
+        return null;
+    }
+}
+
 function cacheKey(url, options) {
     const method = (options.method || 'GET').toUpperCase();
     return method === 'GET' ? url : url + '|' + JSON.stringify(options.body || null);
 }
+
+// ─── Suspense ────────────────────────────────────────────────
+//
+// Re-exported so pages can reach them as globals without an import:
+//   const products = createResource(fetch('/api/products').then(r => r.json()));
+//   export default function Page() { return <List items={use(products)} />; }
+
+import { createResource, fetchResource, use } from './suspense.js';
+
+export { createResource, fetchResource, use };
 
 // ─── useFetch ────────────────────────────────────────────────
 

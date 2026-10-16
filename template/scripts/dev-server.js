@@ -42,6 +42,12 @@ const BLOCKED_FILES = new Set([
     'bun.lockb',
     'tsconfig.json',
     'jsconfig.json',
+    // Middleware runs server-side and routinely holds JWT secrets and auth
+    // logic. It is a hook, never an importable browser module.
+    'middleware.js',
+    'middleware.mjs',
+    'middleware.cjs',
+    'middleware.ts',
 ]);
 
 // Directories that only ever hold server-side code or data.
@@ -66,11 +72,15 @@ function forbiddenReason(urlPath) {
 
     const file = parts[parts.length - 1];
 
-    if (BLOCKED_FILES.has(file)) return 'project metadata file';
+    if (BLOCKED_FILES.has(file)) return 'project metadata or server hook';
 
     if (parts[0] === 'scripts') {
         return ALLOWED_SCRIPT_FILES.has(file) ? null : 'dev-server internals';
     }
+
+    // app/api/** is served by the API router under /api/**. The source files
+    // themselves are server-only and must never be fetched as modules.
+    if (parts[0] === 'app' && parts[1] === 'api') return 'server-only API route';
 
     if (parts.some(p => BLOCKED_DIRS.has(p))) return 'server-only directory';
     if (SERVER_MODULE_RE.test(file)) return 'server-only module';
@@ -111,12 +121,10 @@ console.log(`🚀 Aziz.js dev server starting${PRODUCTION ? ' (production mode)'
 // Scans app/ and builds the page/layout/not-found/loading/error list for the
 // client router.
 
-const PAGE_NAMES     = ['page.js', 'page.jsx'];
-const LAYOUT_NAMES   = ['layout.js', 'layout.jsx'];
-const LOADING_NAMES  = ['loading.js', 'loading.jsx'];
-const ERROR_NAMES    = ['error.js', 'error.jsx'];
-// Next.js calls it not-found.js; 404.js is accepted as a friendlier alias.
-const NOTFOUND_NAMES = ['not-found.js', 'not-found.jsx', '404.js', '404.jsx'];
+// Every page-route file extension the scanner recognises. TypeScript (.ts/.tsx)
+// is supported as of 3.1.3 — before that these were silently ignored and the
+// route just 404'd, which was the worst failure mode in the framework.
+const PAGE_EXT = ['.js', '.jsx', '.ts', '.tsx'];
 
 function buildRouteManifest() {
     const manifest = [];
@@ -125,6 +133,13 @@ function buildRouteManifest() {
 
     const filePathFor = (routeBase, fileName) =>
         '/app' + (routeBase === '/' ? '' : routeBase) + '/' + fileName;
+
+    // Match "<name>.js|.jsx|.ts|.tsx" for a given base name.
+    const matchFile = (base, name) => {
+        const dot = name.lastIndexOf('.');
+        if (dot === -1) return false;
+        return name.slice(0, dot) === base && PAGE_EXT.includes(name.slice(dot).toLowerCase());
+    };
 
     function scan(dir, routeBase) {
         const entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -141,20 +156,21 @@ function buildRouteManifest() {
 
             const name = entry.name;
 
-            if (PAGE_NAMES.includes(name)) {
+            if (matchFile('page', name)) {
                 manifest.push({ type: 'page', pathname: routeBase || '/', filePath: filePathFor(routeBase, name) });
-            } else if (LAYOUT_NAMES.includes(name)) {
+            } else if (matchFile('layout', name)) {
                 manifest.push({ type: 'layout', pathname: routeBase || '/', filePath: filePathFor(routeBase, name) });
-            } else if (LOADING_NAMES.includes(name)) {
+            } else if (matchFile('loading', name)) {
                 manifest.push({ type: 'loading', pathname: routeBase || '/', filePath: filePathFor(routeBase, name) });
-            } else if (ERROR_NAMES.includes(name)) {
+            } else if (matchFile('error', name)) {
                 manifest.push({ type: 'error', pathname: routeBase || '/', filePath: filePathFor(routeBase, name) });
-            } else if (NOTFOUND_NAMES.includes(name) && routeBase === '/') {
-                // filePath must use the real name — the old code hardcoded .js,
-                // which broke not-found.jsx.
-                manifest.push({ type: 'not-found', pathname: '/not-found', filePath: filePathFor(routeBase, name) });
+            } else if (matchFile('not-found', name) || matchFile('404', name)) {
+                if (routeBase === '/') {
+                    // filePath must use the real name — the old code hardcoded .js
+                    manifest.push({ type: 'not-found', pathname: '/not-found', filePath: filePathFor(routeBase, name) });
+                }
             }
-            // route.js files are API routes — handled by api-router, not the page router
+            // route.* files are API routes — handled by api-router, not the page router
         }
     }
 
@@ -172,11 +188,119 @@ async function reloadApiRoutes(verbose = true) {
 
 // ─── HTTP Server ─────────────────────────────────────────────
 
+// ─── Middleware ──────────────────────────────────────────────
+//
+// Next-parity: an optional root-level middleware.{js,mjs,ts} runs before
+// page routes and API routes. It can rewrite, redirect, short-circuit with a
+// response, or add response headers — the common cases being auth guards and
+// locale prefixes.
+//
+// export default function middleware(request) {
+//     if (!request.cookies.token && !isPublic(request.pathname)) {
+//         return NextResponse.redirect(new URL('/login', request.url));
+//     }
+//     return NextResponse.next();
+// }
+
+const MIDDLEWARE_NAMES = ['middleware.js', 'middleware.mjs', 'middleware.cjs', 'middleware.ts'];
+
+let middlewareFn = null;
+let middlewareConfig = { matcher: null };
+
+function findMiddlewareFile() {
+    for (const name of MIDDLEWARE_NAMES) {
+        const p = path.join(ROOT, name);
+        if (fs.existsSync(p)) return p;
+    }
+    return null;
+}
+
+async function loadMiddleware() {
+    const file = findMiddlewareFile();
+    if (!file) return null;
+    try {
+        apiRouter.purgeProjectRequireCache(ROOT);
+        const mod = require(file);
+        const fn = typeof mod === 'function' ? mod : (mod.default || mod.middleware);
+        if (typeof fn !== 'function') {
+            console.warn(`⚠️  ${path.basename(file)} does not export a function — ignoring.`);
+            return null;
+        }
+        middlewareConfig = (mod.config && mod.config.matcher) || null;
+        return fn;
+    } catch (err) {
+        console.warn(`⚠️  Failed to load middleware: ${err.message}`);
+        return null;
+    }
+}
+
+function middlewareMatches(pathname) {
+    const m = middlewareConfig;
+    if (!m) return true;
+    const list = Array.isArray(m) ? m : [m];
+    return list.some(entry => {
+        if (!entry || !entry.source) return true;
+        try {
+            return new RegExp('^' + entry.source).test(pathname);
+        } catch {
+            return true;
+        }
+    });
+}
+
+function parseRequestCookies(header) {
+    const out = {};
+    if (!header) return out;
+    for (const part of String(header).split(';')) {
+        const i = part.indexOf('=');
+        if (i === -1) continue;
+        out[part.slice(0, i).trim()] = decodeURIComponent(part.slice(i + 1).trim());
+    }
+    return out;
+}
+
+// NextResponse.headers is a Map with case-sensitive keys, while the DOM
+// Headers object is case-insensitive — so look the name up defensively.
+function headerValue(headers, name) {
+    if (!headers) return undefined;
+    const lower = name.toLowerCase();
+    if (typeof headers.entries === 'function') {
+        for (const [k, v] of headers.entries()) {
+            if (String(k).toLowerCase() === lower) return v;
+        }
+        return undefined;
+    }
+    for (const [k, v] of Object.entries(headers)) {
+        if (k.toLowerCase() === lower) return v;
+    }
+    return undefined;
+}
+
+function sendMiddlewareResponse(res, result, method) {
+    const headers = {};
+    const raw = result.headers;
+    if (raw) {
+        const entries = typeof raw.forEach === 'function' && typeof raw.get === 'function'
+            ? [...raw.entries()]
+            : Object.entries(raw);
+        for (const [k, v] of entries) headers[k] = v;
+    }
+    if (!headers['Content-Type'] && typeof result.body === 'string') {
+        headers['Content-Type'] = 'application/json; charset=utf-8';
+    }
+    res.writeHead(result.status || 200, headers);
+    res.end(method === 'HEAD' ? undefined : result.body ?? '');
+}
+
+// ─── HTTP Server ─────────────────────────────────────────────
+
 const MIME = {
     '.html': 'text/html; charset=utf-8',
     '.js':   'text/javascript; charset=utf-8',
     '.jsx':  'text/javascript; charset=utf-8',
     '.mjs':  'text/javascript; charset=utf-8',
+    '.ts':   'text/javascript; charset=utf-8',
+    '.tsx':  'text/javascript; charset=utf-8',
     '.css':  'text/css; charset=utf-8',
     '.json': 'application/json; charset=utf-8',
     '.png':  'image/png',
@@ -219,6 +343,58 @@ function etagFor(stat) {
 const server = http.createServer(async (req, res) => {
     const rawUrl = req.url;
     const urlWithoutQuery = rawUrl.split('?')[0];
+    const middlewareHeaders = [];
+
+    // ── Middleware (auth guards, redirects, rewrites)
+    if (middlewareFn) {
+        const pathname = urlWithoutQuery;
+        const isAsset = pathname.startsWith('/_framework/') ||
+                        pathname.startsWith('/_modules/') ||
+                        pathname.startsWith('/scripts/') ||
+                        /\.[a-z0-9]+$/i.test(pathname);
+        if (!isAsset && middlewareMatches(pathname)) {
+            try {
+                const { NextResponse } = require(path.join(ROOT, '_framework', 'next-response.js'));
+                const request = {
+                    url: `http://${req.headers.host || 'localhost'}${req.url}`,
+                    method: req.method,
+                    pathname,
+                    headers: req.headers,
+                    cookies: parseRequestCookies(req.headers.cookie),
+                };
+                const result = await middlewareFn(request, { NextResponse });
+
+                if (result) {
+                    const status = typeof result.status === 'number' ? result.status : 200;
+                    const location = headerValue(result.headers, 'location');
+
+                    if (status >= 300 && status < 400 && location) {
+                        res.writeHead(status, { Location: location, ...NO_CACHE });
+                        res.end();
+                        return;
+                    }
+
+                    // A body means "handle this request yourself".
+                    if (result.body !== undefined && result.body !== null &&
+                        result.status !== 200 && typeof result.status === 'number') {
+                        sendMiddlewareResponse(res, result, req.method);
+                        return;
+                    }
+                    if (result.headers) {
+                        middlewareHeaders.push(result.headers);
+                    }
+                    if (result.rewrite) {
+                        req.url = result.rewrite;
+                    }
+                }
+            } catch (err) {
+                console.error('❌ Middleware error:', err.message);
+                res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
+                res.end(JSON.stringify({ error: 'Middleware error', detail: err.message }));
+                return;
+            }
+        }
+    }
 
     // ── API routes (api/** and app/api/**/route.js)
     if (urlWithoutQuery === '/api' || urlWithoutQuery.startsWith('/api/')) {
@@ -363,8 +539,8 @@ const server = http.createServer(async (req, res) => {
 
         let content = fs.readFileSync(filePath);
 
-        // Transform JS/JSX: JSX → h() + rewrite imports (mtime-cached)
-        if (fileExt === '.js' || fileExt === '.jsx' || fileExt === '.mjs') {
+        // Transform JS/JSX/TS: JSX → h(), types stripped, imports rewritten (mtime-cached)
+        if (['.js', '.jsx', '.mjs', '.ts', '.tsx'].includes(fileExt)) {
             const code = transformModule(content.toString(), filePath, stat.mtimeMs);
             content = Buffer.from(code);
         }
@@ -445,7 +621,7 @@ if (!PRODUCTION) {
             fs.watch(full, { recursive: true }, (_, filename) => {
                 if (!filename) return;
                 const ext = path.extname(filename);
-                if (!['.js', '.jsx', '.mjs', '.css', '.json'].includes(ext)) return;
+                if (!['.js', '.jsx', '.mjs', '.ts', '.tsx', '.css', '.json'].includes(ext)) return;
 
                 console.log(`\n📝 Changed: ${dir}/${filename}`);
 
@@ -487,7 +663,15 @@ function startServer(port) {
     });
 }
 
-reloadApiRoutes().then(() => startServer(PORT)).catch(err => {
-    console.error('❌ Failed to load API routes:', err);
-    startServer(PORT);
-});
+reloadApiRoutes()
+    .then(async () => {
+        middlewareFn = await loadMiddleware();
+        if (middlewareFn) {
+            console.log(`🛡️  Middleware active (${path.basename(findMiddlewareFile())})`);
+        }
+    })
+    .then(() => startServer(PORT))
+    .catch(err => {
+        console.error('❌ Failed to load API routes:', err);
+        startServer(PORT);
+    });

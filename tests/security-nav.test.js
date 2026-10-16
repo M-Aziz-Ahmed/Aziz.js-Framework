@@ -84,6 +84,9 @@ const SECRETS = {
     'server/creds.js': 'module.exports = { secret: "SERVER_DIR" };\n',
     'data/sessions.json': '{ "secret": "SESSION_DATA" }\n',
     'scripts/secret-config.js': 'module.exports = "SERVER_CONFIG";\n',
+    'middleware.js': 'const jwt = require("jsonwebtoken");\nmodule.exports = "JWT_SECRET_HERE";\n',
+    'app/api/auth/signup/route.mjs': 'export function POST() { return "SERVER_API_SOURCE"; }\n',
+    'app/api/users.js': 'module.exports = "LEGACY_API_SOURCE";\n',
 };
 
 // Exact literals planted in SECRETS — asserting on values, not on words like
@@ -97,6 +100,9 @@ const SECRET_VALUES = [
     'SERVER_DIR',
     'SESSION_DATA',
     'SERVER_CONFIG',
+    'JWT_SECRET_HERE',
+    'SERVER_API_SOURCE',
+    'LEGACY_API_SOURCE',
 ];
 
 test('BUGFIX: secrets and server internals are never served', async () => {
@@ -108,6 +114,7 @@ test('BUGFIX: secrets and server internals are never served', async () => {
             '/package.json', '/package-lock.json',
             '/lib/store.server.js', '/server/creds.js',
             '/data/sessions.json', '/scripts/secret-config.js', '/scripts/dev-server.js',
+            '/middleware.js', '/app/api/auth/signup/route.mjs', '/app/api/users.js',
         ]) {
             out.push([p, await req(port, p)]);
         }
@@ -152,7 +159,7 @@ test('BUGFIX: a blocked path does not fall through to the SPA index', async () =
 
 test('router exposes Next.js-compatible navigation globals', async () => {
     installDOM();
-    const { router: mod } = await loadFramework(['router.js', 'runtime.js', 'hooks.js', 'route-match.js']);
+    const { router: mod } = await loadFramework(FRAMEWORK);
 
     const expected = [
         'navigate', 'useRouter', 'useParams', 'useSearchParams',
@@ -167,7 +174,7 @@ test('router exposes Next.js-compatible navigation globals', async () => {
 test('usePathname() reads window.location instead of the caller poking at it', () => {
     installDOM();
     globalThis.window.location = { pathname: '/blog/hello', search: '?q=x', hash: '' };
-    return loadFramework(['router.js', 'runtime.js', 'hooks.js', 'route-match.js']).then(({ router: mod }) => {
+    return loadFramework(FRAMEWORK).then(({ router: mod }) => {
         assert.equal(mod.usePathname(), '/blog/hello');
         assert.equal(mod.useSearchParams().get('q'), 'x');
     });
@@ -176,7 +183,7 @@ test('usePathname() reads window.location instead of the caller poking at it', (
 test('useNavigation() mirrors useRouter and reports an idle transition', async () => {
     installDOM();
     globalThis.window.location = { pathname: '/x', search: '', hash: '' };
-    const { router: mod } = await loadFramework(['router.js', 'runtime.js', 'hooks.js', 'route-match.js']);
+    const { router: mod } = await loadFramework(FRAMEWORK);
     const nav = mod.useNavigation();
     assert.equal(nav.isPending, false);
     assert.equal(nav.state, 'idle');
@@ -191,7 +198,7 @@ test('useNavigation() mirrors useRouter and reports an idle transition', async (
 test('useRouter() exposes replace/refresh/prefetch for Next.js parity', async () => {
     installDOM();
     globalThis.window.location = { pathname: '/y', search: '', hash: '' };
-    const { router: mod } = await loadFramework(['router.js', 'runtime.js', 'hooks.js', 'route-match.js']);
+    const { router: mod } = await loadFramework(FRAMEWORK);
     const r = mod.useRouter();
     for (const m of ['push', 'replace', 'back', 'forward', 'refresh', 'prefetch']) {
         assert.equal(typeof r[m], 'function', `useRouter must expose ${m}`);
@@ -201,7 +208,7 @@ test('useRouter() exposes replace/refresh/prefetch for Next.js parity', async ()
 
 test('useTransition() runs a callback and tracks async work', async () => {
     mountHarness('/t');
-    const { router: mod, runtime } = await loadFramework(['router.js', 'runtime.js', 'hooks.js', 'route-match.js']);
+    const { router: mod, runtime } = await loadFramework(FRAMEWORK);
     const inst = mod.router;
     globalThis.h = runtime.h;
 
@@ -236,7 +243,7 @@ test('useTransition() runs a callback and tracks async work', async () => {
 
 test('notFound() throws a signal the router can catch', async () => {
     installDOM();
-    const { router: mod } = await loadFramework(['router.js', 'runtime.js', 'hooks.js', 'route-match.js']);
+    const { router: mod } = await loadFramework(FRAMEWORK);
     assert.throws(() => mod.notFound(), /AZIZ_NOT_FOUND/);
 });
 
@@ -253,7 +260,7 @@ function mountHarness(pathname) {
 
 test('BUGFIX: notFound() swaps the page for the 404 screen', async () => {
     const { root } = mountHarness('/boom');
-    const { router: mod, runtime } = await loadFramework(['router.js', 'runtime.js', 'hooks.js', 'route-match.js']);
+    const { router: mod, runtime } = await loadFramework(FRAMEWORK);
     const router = mod.router;               // the router instance, not the namespace
     globalThis.h = runtime.h;
 
@@ -268,7 +275,7 @@ test('BUGFIX: notFound() swaps the page for the 404 screen', async () => {
 
 test('a real page error is not swallowed as a 404', async () => {
     mountHarness('/crash');
-    const { router: mod, runtime } = await loadFramework(['router.js', 'runtime.js', 'hooks.js', 'route-match.js']);
+    const { router: mod, runtime } = await loadFramework(FRAMEWORK);
     const router = mod.router;
     globalThis.h = runtime.h;
 
@@ -279,7 +286,7 @@ test('a real page error is not swallowed as a 404', async () => {
 
 // ─── loading.js / error.js ───────────────────────────────────
 
-const FRAMEWORK = ['router.js', 'runtime.js', 'hooks.js', 'route-match.js'];
+const FRAMEWORK = ['router.js', 'runtime.js', 'hooks.js', 'route-match.js', 'metadata.js', 'suspense.js'];
 async function loadRouter() {
     const mod = await loadFramework(FRAMEWORK);
     globalThis.h = mod.runtime.h;
@@ -406,4 +413,233 @@ test('nested loading.js overrides the root one for that subtree', async () => {
     hooks.endLoad();
     await sleep(60);
     assert.match(root.textContent, /BLOG PAGE/);
+});
+
+// ─── Suspense (page-level) ───────────────────────────────────
+
+const { installDOM: _noop } = require('./helpers/dom.js');
+
+test('createResource throws its promise while pending, then returns the value', async () => {
+    const { suspense } = await loadFramework(['suspense.js']);
+
+    let resolveIt;
+    const slow = suspense.createResource(() => new Promise(r => { resolveIt = r; }));
+
+    // Pending -> reading suspends
+    assert.throws(() => slow.read(), (err) => typeof err.then === 'function',
+        'read() must throw the promise while pending');
+    assert.equal(slow.status, 'pending');
+
+    resolveIt({ ok: 1 });
+    await slow.promise;
+
+    assert.equal(slow.status, 'success');
+    assert.deepEqual(slow.read(), { ok: 1 }, 'read() returns the resolved value');
+});
+
+test('a rejected resource rethrows its error on read', async () => {
+    const { suspense } = await loadFramework(['suspense.js']);
+    const bad = suspense.createResource(() => Promise.reject(new Error('boom')));
+    await bad.promise.catch(() => {});
+    assert.equal(bad.status, 'error');
+    assert.throws(() => bad.read(), /boom/);
+});
+
+test('a resource resolves once and caches, without re-running its source', async () => {
+    const { suspense } = await loadFramework(['suspense.js']);
+    let calls = 0;
+    const r = suspense.createResource(() => { calls++; return Promise.resolve(calls); });
+    assert.throws(() => r.read());
+    await r.promise;
+    assert.equal(r.read(), 1);
+    assert.equal(r.read(), 1);
+    assert.equal(calls, 1, 'the source must not run again once settled');
+});
+
+test('a suspended page shows loading.js, then re-renders with data', async () => {
+    const { root } = mountHarness('/susp');
+    const { router: mod, runtime, suspense } = await loadRouter();
+    const router = mod.router;
+    globalThis.h = runtime.h;
+
+    let resolveIt;
+    const resource = suspense.createResource(() => new Promise(r => { resolveIt = r; }));
+
+    // The page suspends on first render.
+    router.register('/susp', {
+        default: function Page() {
+            const data = suspense.use(resource);
+            return h('p', null, 'REAL DATA ' + data);
+        },
+    });
+    router.registerLoading('/', { default: () => h('p', null, 'SUSPENDED FALLBACK') });
+
+    await router.render();
+    assert.match(root.textContent, /SUSPENDED FALLBACK/,
+        `expected loading.js while suspended, got: ${JSON.stringify(root.textContent)}`);
+
+    // Data arrives -> the page re-renders by itself.
+    resolveIt('here');
+    await sleep(60);
+    await sleep(60);
+
+    assert.match(root.textContent, /REAL DATA here/,
+        `expected the page after the promise settled, got: ${JSON.stringify(root.textContent)}`);
+});
+
+test('a suspended page with no loading.js still resolves', async () => {
+    const { root } = mountHarness('/susp2');
+    const { router: mod, runtime, suspense } = await loadRouter();
+    const router = mod.router;
+    globalThis.h = runtime.h;
+
+    let resolveIt;
+    const resource = suspense.createResource(() => new Promise(r => { resolveIt = r; }));
+
+    router.register('/susp2', {
+        default: function Page() {
+            const v = suspense.use(resource);
+            return h('p', null, 'DONE ' + v);
+        },
+    });
+    // deliberately no loading.js registered
+
+    await router.render();
+    resolveIt('ok');
+    await sleep(60);
+    await sleep(60);
+
+    assert.match(root.textContent, /DONE ok/,
+        `expected the page to render, got: ${JSON.stringify(root.textContent)}`);
+});
+
+test('a failed resource reaches error.js, not a silent blank page', async () => {
+    const { root } = mountHarness('/susp3');
+    const { router: mod, runtime, suspense } = await loadRouter();
+    const router = mod.router;
+    globalThis.h = runtime.h;
+
+    const resource = suspense.createResource(() => Promise.reject(new Error('API down')));
+
+    router.register('/susp3', {
+        default: function Page() { suspense.use(resource); return h('p', null, 'never'); },
+    });
+    router.registerLoading('/', { default: () => h('p', null, 'FALLBACK') });
+    router.registerError('/', {
+        default: (props) => h('p', null, 'BOUNDARY: ' + props.error.message),
+    });
+
+    await router.render();
+    await sleep(60);
+    await sleep(60);
+
+    assert.match(root.textContent, /BOUNDARY: API down/,
+        `expected error.js to catch the failed resource, got: ${JSON.stringify(root.textContent)}`);
+});
+
+test('a failed resource with no error.js shows a built-in error screen', async () => {
+    const { root } = mountHarness('/susp4');
+    const { router: mod, runtime, suspense } = await loadRouter();
+    const router = mod.router;
+    globalThis.h = runtime.h;
+
+    const resource = suspense.createResource(() => Promise.reject(new Error('DB unreachable')));
+
+    router.register('/susp4', {
+        default: function Page() { suspense.use(resource); return h('p', null, 'never'); },
+    });
+    // deliberately no loading.js and no error.js registered
+
+    const rejections = [];
+    const onRejection = (e) => rejections.push(e);
+    process.on('unhandledRejection', onRejection);
+
+    await router.render();
+    await sleep(80);
+    await sleep(80);
+    process.off('unhandledRejection', onRejection);
+
+    assert.match(root.textContent, /Something went wrong/,
+        `expected the built-in error screen, got: ${JSON.stringify(root.textContent)}`);
+    assert.match(root.textContent, /DB unreachable/, 'must show the underlying reason');
+    assert.equal(rejections.length, 0, 'must not leave an unhandled rejection');
+});
+
+function headTags(document) {
+    const find = (attr, key) => document.head.childNodes.filter(
+        n => n.attributes && n.attributes[attr] === key);
+    const content = (attr, key) => {
+        const t = find(attr, key)[0];
+        return t && t.attributes.content;
+    };
+    return {
+        all: () => document.head.childNodes.map(n => ({ ...n.attributes })),
+        name: (k) => content('name', k),
+        property: (k) => content('property', k),
+        link: (rel) => {
+            const t = find('rel', rel)[0];
+            return t && t.attributes.href;
+        },
+    };
+}
+
+test('BUGFIX: metadata renders the full head, not just title/description', async () => {
+    const { document } = installDOM();
+    const { metadata } = await loadFramework(['metadata.js']);
+
+    metadata.applyMetadata({
+        title: 'My App',
+        description: 'A description',
+        keywords: ['aziz', 'js'],
+        author: 'Aziz',
+        robots: 'index, follow',
+        themeColor: '#0af',
+        viewport: 'width=device-width',
+        canonical: 'https://example.com/',
+        openGraph: { title: 'OG Title', description: 'OG Desc', image: '/og.png', type: 'website' },
+        twitter: { card: 'summary_large_image', creator: '@aziz' },
+    });
+
+    const head = headTags(document);
+    assert.equal(document.title, 'My App');
+    assert.equal(head.name('description'), 'A description');
+    assert.equal(head.name('keywords'), 'aziz, js', 'array keywords are joined');
+    assert.equal(head.name('author'), 'Aziz');
+    assert.equal(head.name('robots'), 'index, follow');
+    assert.equal(head.name('theme-color'), '#0af');
+    assert.equal(head.name('viewport'), 'width=device-width');
+    assert.equal(head.property('og:title'), 'OG Title');
+    assert.equal(head.property('og:description'), 'OG Desc');
+    assert.equal(head.property('og:image'), '/og.png');
+    assert.equal(head.name('twitter:card'), 'summary_large_image');
+    assert.equal(head.name('twitter:creator'), '@aziz');
+    assert.equal(head.link('canonical'), 'https://example.com/');
+});
+
+test('page metadata deep-merges over layout metadata', async () => {
+    installDOM();
+    const { metadata } = await loadFramework(['metadata.js']);
+    const merged = metadata.mergeMetadata(
+        { metadata: { title: 'Layout', openGraph: { title: 'Layout OG', siteName: 'Site' } } },
+        { metadata: { title: 'Page', openGraph: { title: 'Page OG' } } },
+    );
+    assert.equal(merged.title, 'Page', 'page wins');
+    assert.equal(merged.openGraph.title, 'Page OG');
+    assert.equal(merged.openGraph.siteName, 'Site',
+        'untouched layout fields must survive the deep merge');
+});
+
+test('metadata title accepts the { default, absolute } object form', async () => {
+    installDOM();
+    const { metadata } = await loadFramework(['metadata.js']);
+    metadata.applyMetadata({ title: { default: 'Page', absolute: 'Page | Site' } });
+    assert.equal(globalThis.document.title, 'Page | Site');
+});
+
+test('a page export const prefetch = [...] is exposed for <Link prefetch>', async () => {
+    mountHarness('/x');
+    const { router: mod } = await loadRouter();
+    assert.equal(typeof mod.prefetch, 'function');
+    // No routes registered -> resolves without throwing.
+    await mod.prefetch('/nothing');
 });

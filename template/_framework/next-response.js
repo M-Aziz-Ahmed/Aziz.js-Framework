@@ -112,6 +112,21 @@ class NextResponse {
         });
     }
 
+    // "Continue to the next handler." The dev server reads .rewrite from the
+    // result; .continue signals an explicit pass-through.
+    static next(init = {}) {
+        const res = new NextResponse(null, { ...init, status: 200 });
+        res.continue = true;
+        return res;
+    }
+
+    static rewrite(url, init = {}) {
+        const destination = typeof url === 'string' ? url : String(url);
+        const res = new NextResponse(null, { ...init, status: 200 });
+        res.rewrite = destination;
+        return res;
+    }
+
     static error() {
         return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
     }

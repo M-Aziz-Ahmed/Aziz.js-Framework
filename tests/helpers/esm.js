@@ -13,14 +13,35 @@ let counter = 0;
 function copyFramework(names) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aziz-test-'));
     fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ type: 'module' }));
-    for (const name of names) {
-        const src = fs.readFileSync(path.join(FRAMEWORK_DIR, name), 'utf8');
-        // Framework modules import siblings by absolute browser path
-        // ("/_framework/runtime.js"), which Node's ESM loader cannot resolve.
-        // Rewrite to sibling-relative so the copy runs under Node.
-        const rewritten = src.replace(/(['"])\/_framework\/([^'"]+)\1/g, "'./$2'");
-        fs.writeFileSync(path.join(dir, name), rewritten);
+
+    // Framework modules import siblings by absolute browser path
+    // ("/_framework/runtime.js"), which Node's ESM loader cannot resolve.
+    // Rewrite to sibling-relative so the copy runs under Node, and follow
+    // those (now relative) imports so callers only have to name the module
+    // they actually want to test.
+    const written = new Set();
+
+    function write(name) {
+        if (written.has(name)) return;
+        written.add(name);
+
+        const src = path.join(FRAMEWORK_DIR, name);
+        if (!fs.existsSync(src)) return;
+
+        const code = fs.readFileSync(src, 'utf8')
+            .replace(/(['"])\/_framework\/([^'"]+)\1/g, "'./$2'");
+
+        fs.writeFileSync(path.join(dir, name), code);
+
+        for (const match of code.matchAll(/from\s+['"]\.\/([^'"]+)['"]/g)) {
+            write(match[1]);
+        }
+        for (const match of code.matchAll(/import\s*\(\s*['"]\.\/([^'"]+)['"]\s*\)/g)) {
+            write(match[1]);
+        }
     }
+
+    for (const name of names) write(name);
     return dir;
 }
 
@@ -37,6 +58,8 @@ async function loadFramework(names) {
         'hooks.js': 'hooks',
         'api.js': 'api',
         'route-match.js': 'routeMatch',
+        'metadata.js': 'metadata',
+        'suspense.js': 'suspense',
         'router.js': 'router',
     };
     for (const name of names) {

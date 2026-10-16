@@ -105,6 +105,9 @@ function scanDirForRoutes(dir, urlBase, suffixes, out) {
     }
 }
 
+// route.js / route.mjs / route.ts / route.tsx — the Next.js App Router shape.
+const ROUTE_FILE_RE = /^route\.(m|c)?(j|t)sx?$/;
+
 function discoverApiFiles(ROOT) {
     const found = [];
 
@@ -116,7 +119,7 @@ function discoverApiFiles(ROOT) {
                 const full = path.join(dir, entry.name);
                 if (entry.isDirectory()) {
                     walk(full, urlBase === '/' ? '/' + entry.name : urlBase + '/' + entry.name);
-                } else if (entry.name === 'route.js' || entry.name === 'route.mjs') {
+                } else if (ROUTE_FILE_RE.test(entry.name)) {
                     found.push({ pattern: urlBase.replace(/\/+/g, '/'), file: full });
                 }
             }
@@ -132,8 +135,8 @@ function discoverApiFiles(ROOT) {
                 const full = path.join(dir, entry.name);
                 if (entry.isDirectory()) {
                     walk(full, urlBase === '/' ? '/' + entry.name : urlBase + '/' + entry.name);
-                } else if (/\.(m)?js$/.test(entry.name)) {
-                    const name = entry.name.replace(/\.(m)?js$/, '');
+                } else if (/\.(m|c)?(j|t)sx?$/.test(entry.name)) {
+                    const name = entry.name.replace(/\.(m|c)?(j|t)sx?$/, '');
                     const pattern = (urlBase === '/' ? '' : urlBase) + '/' + name;
                     found.push({ pattern: pattern.replace(/\/+/g, '/'), file: full });
                 }

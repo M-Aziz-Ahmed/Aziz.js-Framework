@@ -15,8 +15,10 @@
 // ============================================================
 
 import { h, mountPage, disposeFibers, beginRender, materialize, appendNodes } from '/_framework/runtime.js';
-import { useState, useCallback, getPendingLoads, onLoadState } from '/_framework/hooks.js';
+import { useState, useCallback, getPendingLoads, onLoadState, warmCache } from '/_framework/hooks.js';
+import { isThenable } from '/_framework/suspense.js';
 import { normalizePath, resolveRoute, collectLayouts } from '/_framework/route-match.js';
+import { mergeMetadata, applyMetadata } from '/_framework/metadata.js';
 
 // Registered routes / layouts (populated by the dev server manifest)
 const routes = {};
@@ -77,13 +79,46 @@ export function notFound() {
     throw new Error(NOT_FOUND_SIGNAL);
 }
 
+// Real prefetching. Page modules are already imported at boot, so the only
+// meaningful thing to warm is the route's *data*. A page declares what it
+// needs with `export const prefetch = ['/api/users']`, and <Link prefetch>
+// (or router.prefetch) fetches those into the shared cache on hover/focus, so
+// the navigation usually finds them already settled.
+const prefetched = new Set();
+
+function prefetchFor(pathname) {
+    const normalized = normalizePath(pathname);
+    const match = resolveRoute(routes, normalized);
+    if (!match) return Promise.resolve();
+    const declared = match.value && match.value.prefetch;
+    if (!declared) return Promise.resolve();
+
+    const urls = Array.isArray(declared) ? declared : [declared];
+    const jobs = urls.map((url) => {
+        const key = 'GET:' + url;
+        if (prefetched.has(key)) return null;
+        prefetched.add(key);
+        return warmCache(url);
+    }).filter(Boolean);
+    return Promise.all(jobs);
+}
+
+export function prefetch(path) {
+    try { return prefetchFor(path); } catch { return Promise.resolve(); }
+}
+
 // <Link href="/about">About</Link>
-export function Link({ href, children, className, style, onClick, replace = false, scroll = true, prefetch = false, ...rest }) {
+export function Link({ href, children, className, style, onClick, replace = false, scroll = true, prefetch: shouldPrefetch = false, ...rest }) {
+    const warm = () => { if (shouldPrefetch && href) prefetchFor(href); };
+
     return h('a', {
         ...rest,
         href,
         class: className,
         style,
+        onMouseEnter: warm,
+        onFocus: warm,
+        onTouchStart: warm,
         onClick: (e) => {
             if (typeof onClick === 'function') onClick(e);
             if (e.defaultPrevented) return;
@@ -106,8 +141,8 @@ export function useRouter() {
         back,
         forward,
         refresh,
-        // Aziz.js has no route prefetching (see README) — kept for API parity.
-        prefetch: () => Promise.resolve(),
+        // Warms the route's declared data into the fetch cache.
+        prefetch,
         params: router.currentParams || {},
     };
 }
@@ -184,6 +219,29 @@ function DefaultNotFound() {
     );
 }
 
+// Used when a page suspends but no loading.js is registered anywhere.
+function DefaultLoading() {
+    return h('div', {
+        style: { padding: '60px 24px', textAlign: 'center', color: '#666' },
+    }, 'Loading…');
+}
+
+// Used when a page (or a suspended resource) fails and no error.js is
+// registered anywhere. Without this the tree would be left on the loading
+// fallback with nothing explaining why.
+function DefaultErrorScreen({ error, reset }) {
+    return h('div', { style: { padding: '60px 24px', textAlign: 'center', color: '#666' } },
+        h('h1', { style: { fontSize: '32px', color: '#c0392b', margin: '0 0 8px' } }, 'Something went wrong'),
+        h('pre', { style: { whiteSpace: 'pre-wrap', fontSize: '13px' } },
+            (error && error.message) || 'Unknown error'),
+        h('button', {
+            class: 'btn btn-primary',
+            style: { padding: '10px 24px', cursor: 'pointer' },
+            onClick: () => { if (reset) reset(); else navigate('/'); },
+        }, 'Try again')
+    );
+}
+
 // ─── Focus preservation ──────────────────────────────────────
 
 function captureFocus() {
@@ -213,36 +271,6 @@ function restoreFocus(root, saved) {
         if (saved.start !== null && typeof el.setSelectionRange === 'function') {
             try { el.setSelectionRange(saved.start, saved.end); } catch { /* non-text input */ }
         }
-    }
-}
-
-// ─── Metadata ────────────────────────────────────────────────
-
-function metaTitle(value) {
-    if (typeof value === 'string') return value;
-    if (value && typeof value === 'object') return value.absolute || value.default || '';
-    return '';
-}
-
-function applyMetadata(layoutModules, pageModule) {
-    // Outer → inner; page metadata wins last.
-    const metas = [...layoutModules.map(m => m && m.metadata), pageModule && pageModule.metadata]
-        .filter(Boolean);
-    if (metas.length === 0) return;
-
-    const merged = Object.assign({}, ...metas);
-
-    const title = metaTitle(merged.title);
-    if (title) document.title = title;
-
-    if (merged.description) {
-        let tag = document.querySelector('meta[name="description"]');
-        if (!tag) {
-            tag = document.createElement('meta');
-            tag.setAttribute('name', 'description');
-            document.head.appendChild(tag);
-        }
-        tag.setAttribute('content', merged.description);
     }
 }
 
@@ -293,6 +321,7 @@ export const router = {
         window.back = back;
         window.forward = forward;
         window.refresh = refresh;
+        window.prefetch = prefetch;
         window.__rerenderPage = () => this.render();
 
         await this.loadRoutes();
@@ -378,6 +407,22 @@ _finishTransition(epoch) {
     if (this._transitionStop) { this._transitionStop(); this._transitionStop = null; }
 },
 
+    // A suspended resource rejected — surface it through error.js if there is
+    // one. Otherwise fall back to a built-in screen rather than throwing
+    // inside a promise callback, which would become an unhandled rejection
+    // and leave the user staring at the loading fallback forever.
+    _renderSuspendError(reason, layoutComponents, root, pathname) {
+        const boundary = collectNearest(errors, pathname);
+        const error = reason instanceof Error ? reason : new Error(String(reason));
+        const ErrorComponent = (boundary && boundary.module.default) || DefaultErrorScreen;
+        disposeFibers();
+        console.error('❌ Suspended resource failed', pathname, error);
+        mountPage(ErrorComponent, layoutComponents, root, 'error:' + pathname, {
+            error,
+            reset: () => { this._epoch++; this.render(); },
+        });
+    },
+
     async render() {
         return this._renderAt(normalizePath(window.location.pathname));
     },
@@ -429,16 +474,45 @@ _finishTransition(epoch) {
         const ErrorComponent = boundary && boundary.module.default;
         const saved = captureFocus();
 
+        applyMetadata(mergeMetadata(...layoutModules, pageModule));
+
         try {
             mountPage(PageComponent, layoutComponents, root, 'page:' + pathname);
             if (forceLoading) this._finishTransition(this._epoch);
         } catch (err) {
+            // A component suspended via use(resource). Show the nearest
+            // loading.js and re-render once the thrown promise settles.
+            if (isThenable(err)) {
+                disposeFibers();
+                this._suspended = true;
+                const loading = collectNearest(loadings, pathname);
+                const Fallback = (loading && loading.module.default) || DefaultLoading;
+                mountPage(Fallback, layoutComponents, root, 'loading:' + pathname);
+
+                const epoch = ++this._epoch;
+                Promise.resolve(err).then(
+                    () => {
+                        if (epoch !== this._epoch) return;
+                        this._suspended = false;
+                        this._renderAt(pathname);
+                    },
+                    (reason) => {
+                        if (epoch !== this._epoch) return;
+                        this._suspended = false;
+                        this._renderSuspendError(reason, layoutComponents, root, pathname);
+                    }
+                );
+                restoreFocus(root, saved);
+                if (isNewRoute) window.scrollTo(0, 0);
+                return;
+            }
+
             // A page called notFound() — swap in the 404 screen.
             if (err && err.message === NOT_FOUND_SIGNAL) {
                 disposeFibers();
                 const NotFound = (notFoundModule && notFoundModule.default) || DefaultNotFound;
                 mountPage(NotFound, layoutComponents, root, 'notfound:' + pathname);
-                applyMetadata(layoutModules, notFoundModule);
+                applyMetadata(mergeMetadata(...layoutModules, notFoundModule));
             } else if (ErrorComponent) {
                 // A real render error — hand it to the nearest error boundary
                 // instead of white-screening the app. Next.js shape:
@@ -449,7 +523,7 @@ _finishTransition(epoch) {
                     error: err,
                     reset: () => { this._epoch++; this._showingLoading = false; this.render(); },
                 });
-                applyMetadata(layoutModules, null);
+                applyMetadata(mergeMetadata(...layoutModules));
             } else {
                 throw err;
             }

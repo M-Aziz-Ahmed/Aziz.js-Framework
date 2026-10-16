@@ -1,5 +1,35 @@
 # Changelog
 
+## [3.2.0]
+
+### Added
+- **TypeScript support.** `.ts` and `.tsx` are recognised for `page`, `layout`, `loading`, `error`, `not-found`/`404` and API routes (`route.ts`, `api/*.ts`). Types are stripped at transform time — there is still **no type checking**. Previously `.tsx` was silently ignored and the route 404'd with no warning.
+- **`middleware.js`** in the project root, Next-parity: runs before page routes and API routes. Supports `NextResponse.next()`, `.redirect()`, `.json()`, `.rewrite()`, optional `config.matcher`, and receives `{ url, method, pathname, headers, cookies }`. Assets skip it.
+- **`app/loading.js`** — shown while a route's data is in flight, inherited by segment like `layout.js`. Guarded by a 200 ms delay so fast routes never flash a spinner.
+- **`app/error.js`** — error boundary, receives `{ error, reset }` (Next.js shape). Without one, render errors still propagate and are logged rather than being swallowed.
+- **`app/404.js`** as an alias for `app/not-found.js`.
+- **Full metadata API.** `openGraph`, `twitter`, `keywords`, `author`, `robots`, `themeColor`, `viewport`, `canonical`, and `{ default, absolute }` titles. Page metadata deep-merges over layout metadata.
+- **Route prefetching.** Pages declare `export const prefetch = ['/api/x']`; `<Link prefetch>` (or `router.prefetch()`) warms those URLs into the fetch cache on hover/focus/touch.
+- **Page-level data suspension.** `createResource(promise)`, `fetchResource(url)` and `use(resource)` let a page suspend instead of threading `loading`/`error` flags. The nearest `loading.js` becomes the fallback and the page re-renders when the data lands; a failed resource routes to `error.js`, or to a built-in error screen when none exists. Resources cache and never refetch on re-render, and lazy functions (`() => import(...)`) run once.
+- **Next.js-style navigation globals:** `usePathname`, `useNavigation`, `useTransition`, `redirect`, `notFound`, `replace`, `back`, `forward`, `refresh`.
+- `useFetch` response cache (5 s TTL) plus `clearFetchCache()`, so re-mounting a page does not refetch.
+
+### Security
+- **Fixed a critical file-exposure bug.** `.env`, `.env.local`, `.npmrc`, other dotfiles, `package.json`, lockfiles, `node_modules/`, `scripts/`, `server/`, `data/` and `*.server.*` were all served to the browser. They now return 404 in both dev and production. See the README's security model.
+- **Also blocked `middleware.*`.** The new middleware feature holds JWT secrets and auth logic server-side; the file itself must never be fetchable.
+- **Also blocked `app/api/**`.** API route *source* was served as a module. The routes themselves are reachable at `/api/**`, which is the only URL they should answer on.
+- Documented the `server/` + `*.server.mjs` convention for server-only modules.
+
+### Fixed
+- A missing `@babel/standalone` silently served **raw JSX**, which failed in the browser and surfaced as a misleading built-in 404. It now fails loudly with a startup banner and a self-describing module error.
+- `@babel/standalone` v8 (resolved by an unpinned `npm install --save-dev`) broke JSX compilation via its automatic runtime default. The transform now pins `runtime: 'classic'`, working with both v7 and v8.
+- `not-found.jsx` pointed at a hardcoded `/app/not-found.js` that did not exist. The manifest now uses the real filename.
+- `request.params` was silently empty for API routes documented with a second handler argument.
+- `useApi` is documented as an alias of `useFetch`; `useFetch().error` is a string, not an `Error`.
+
+### Known issues
+- On Windows, Node's directory watcher can abort the process at startup with `Assertion failed: !_wcsnicmp` (native, uncatchable). ~1 in 8 starts on projects with nested subdirectories. Not caused by `recursive: true`; restart clears it.
+
 ## [3.1.0] - 2026
 
 ### Breaking Fixes (Behavioral Correctness)
