@@ -12,8 +12,6 @@
 //    -y, --yes            Accept all defaults (no prompts)
 //    --port <n>           Dev-server port (default 3000)
 //    --css <name>         none | bootstrap | tailwind
-//    --no-examples        Skip the example Test page
-//    --no-api             Skip example API routes
 //    --no-docs            Skip the docs/ folder
 //    -h, --help           Show help
 // ============================================================
@@ -34,8 +32,6 @@ function parseArgs(argv) {
         yes: false,
         port: null,
         css: null,
-        examples: null,
-        api: null,
         docs: null,
         help: false,
     };
@@ -49,8 +45,6 @@ function parseArgs(argv) {
             case '--yes': opts.yes = true; break;
             case '--port': opts.port = argv[++i]; break;
             case '--css': opts.css = argv[++i]; break;
-            case '--no-examples': opts.examples = false; break;
-            case '--no-api': opts.api = false; break;
             case '--no-docs': opts.docs = false; break;
             default:
                 if (!arg.startsWith('-') && !opts.projectName) opts.projectName = arg;
@@ -70,8 +64,6 @@ Options:
   -y, --yes           Accept all defaults (skip prompts)
   --port <n>          Dev-server port (default 3000)
   --css <name>        none | bootstrap | tailwind
-  --no-examples       Skip the example Test page
-  --no-api            Skip example API routes
   --no-docs           Skip the docs/ folder
   -h, --help          Show this help
 
@@ -94,7 +86,6 @@ function copyDir(src, dest, features) {
     for (const entry of fs.readdirSync(src)) {
         const srcPath = path.join(src, entry);
         const destPath = path.join(dest, entry);
-        const rel = dest; // not needed; handled below
 
         if (shouldSkip(entry)) continue;
 
@@ -108,17 +99,6 @@ function copyDir(src, dest, features) {
         } else {
             fs.copyFileSync(srcPath, destPath);
         }
-    }
-}
-
-function removeDirIfExists(dir) {
-    if (fs.existsSync(dir)) fs.rmSync(dir, { recursive: true, force: true });
-}
-
-function emptyDirContents(dir) {
-    if (!fs.existsSync(dir)) return;
-    for (const entry of fs.readdirSync(dir)) {
-        fs.rmSync(path.join(dir, entry), { recursive: true, force: true });
     }
 }
 
@@ -198,7 +178,7 @@ async function main() {
     }
 
     console.log(`\n⚡ Welcome to Aziz.js!\n`);
-    console.log(`🎨 A lightweight Next.js clone — file-based routing, React hooks, API routes\n`);
+    console.log(`🎨 A lightweight Next.js clone — file-based routing, React hooks, live reload\n`);
 
     let projectName = opts.projectName;
     if (!projectName) {
@@ -236,26 +216,12 @@ async function main() {
     }
 
     // ── Features
-    let examples = opts.examples;
-    let apiExamples = opts.api;
     let docs = opts.docs;
 
-    if (!opts.yes) {
-        if (examples === null) {
-            const a = await question('   Include example pages? (Y/n): ');
-            examples = !['n', 'no'].includes(a.trim().toLowerCase());
-        }
-        if (apiExamples === null) {
-            const a = await question('   Include example API routes? (Y/n): ');
-            apiExamples = !['n', 'no'].includes(a.trim().toLowerCase());
-        }
-        if (docs === null) {
-            const a = await question('   Include documentation? (Y/n): ');
-            docs = !['n', 'no'].includes(a.trim().toLowerCase());
-        }
+    if (!opts.yes && docs === null) {
+        const a = await question('   Include documentation? (Y/n): ');
+        docs = !['n', 'no'].includes(a.trim().toLowerCase());
     }
-    if (examples === null) examples = true;
-    if (apiExamples === null) apiExamples = true;
     if (docs === null) docs = true;
 
     // ── CSS framework
@@ -270,7 +236,7 @@ async function main() {
     }
     if (!['none', 'bootstrap', 'tailwind'].includes(css)) css = 'none';
 
-    const features = { examples, api: apiExamples, docs, css };
+    const features = { docs, css };
 
     console.log(`\n⚡ Creating "${projectName}"...\n`);
 
@@ -284,22 +250,13 @@ async function main() {
     // 1. Copy the template (excluding node_modules)
     copyDir(templateDir, targetDir, features);
 
-    // 2. Optional features
-    if (!features.examples) {
-        removeDirIfExists(path.join(targetDir, 'app', 'test'));
-    }
-    if (!features.api) {
-        emptyDirContents(path.join(targetDir, 'api'));
-        fs.mkdirSync(path.join(targetDir, 'api'), { recursive: true });
-    }
-
-    // 3. Personalize
+    // 2. Personalize
     updatePackageJson(targetDir, projectName);
     updateDevServerPort(targetDir, port);
     updateTitle(targetDir, projectName);
     setupCSSFramework(targetDir, features.css);
 
-    // 4. .gitignore
+    // 3. .gitignore
     fs.writeFileSync(path.join(targetDir, '.gitignore'), [
         'node_modules/',
         '.DS_Store',
@@ -320,11 +277,8 @@ async function main() {
     console.log(`   app/              ← pages + layouts (file-based routing)`);
     console.log(`     layout.js       ← root layout`);
     console.log(`     page.js         ← route: /`);
-    console.log(`     not-found.js    ← custom 404`);
-    console.log(`   api/              ← server-side API route handlers`);
-    console.log(`   components/       ← shared UI components`);
-    console.log(`   lib/  models/     ← helpers + data models`);
-    console.log(`   _framework/       ← runtime, hooks, router, api client`);
+    console.log(`   styles/           ← global CSS`);
+    console.log(`   _framework/       ← runtime, hooks, router`);
     console.log(`   scripts/          ← dev server + live reload`);
     if (features.docs) console.log(`   docs/             ← full documentation`);
     console.log(`\n✨ Highlights:\n`);
@@ -332,12 +286,9 @@ async function main() {
     console.log(`   • Dynamic routes       app/blog/[slug]/page.js → /blog/:slug`);
     console.log(`   • Nested layouts       app/**/layout.js`);
     console.log(`   • React hooks          useState, useEffect, useMemo, context…`);
-    console.log(`   • API route handlers   api/*.js and app/api/**/route.js`);
-    console.log(`   • API client           api.get('/api/users') — retries + timeouts`);
     console.log(`   • Live reload          instant browser refresh on save`);
     console.log(`\n💡 Tips:\n`);
     console.log(`   • Create app/MyPage/page.js → route /MyPage`);
-    console.log(`   • Create api/todos.js → route /api/todos`);
     if (features.docs) console.log(`   • Read docs/README.md for the full guide`);
     console.log(`\n🚀 Happy building!\n`);
 

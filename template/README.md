@@ -1,6 +1,6 @@
 # ⚡ Aziz.js
 
-A lightweight Next.js clone with file-based routing, React hooks, server-side API routes, and ES module imports — **zero dependencies, instant startup**.
+A lightweight Next.js clone with file-based routing, React hooks, and ES module imports — **zero dependencies, instant startup**.
 
 ```
 Next.js:  ~400KB  +  20 dependencies  +  10s startup
@@ -12,8 +12,7 @@ Aziz.js:  ~50KB   +  0 dependencies   +  <1s startup
 ## Quick Start
 
 ```bash
-npx create-aziz-app my-app
-cd my-app
+npm install
 npm run dev
 ```
 
@@ -28,30 +27,15 @@ my-app/
 ├── index.html          ← entry point (don't touch)
 │
 ├── app/                ← your pages and layouts
-│   ├── layout.js       ← root layout (navbar, footer, etc.)
-│   ├── page.js         ← route: /
-│   ├── about/
-│   │   └── page.js     ← route: /about
-│   └── blog/
-│       └── [slug]/
-│           └── page.js ← route: /blog/:slug  (dynamic)
+│   ├── layout.js       ← root layout (wraps every page)
+│   └── page.js         ← route: /
 │
-├── api/                ← server-side API routes (Node.js)
-│   ├── users.js        ← route: /api/users
-│   └── hello.js        ← route: /api/hello
+├── styles/
+│   └── globals.css     ← global styles
 │
-├── components/         ← shared UI components
-│   ├── Navbar.js
-│   └── Footer.js
-│
-├── lib/                ← utilities, database connections
-│   └── db.js
-│
-├── models/             ← data models
-│   └── User.js
-│
-└── styles/
-    └── globals.css
+├── _framework/         ← runtime, hooks, router (don't touch)
+├── scripts/            ← dev server + live reload (don't touch)
+└── docs/               ← full documentation
 ```
 
 ---
@@ -88,7 +72,6 @@ Just create the file — no registration needed:
 
 ```bash
 mkdir app/dashboard
-touch app/dashboard/page.js
 ```
 
 ```js
@@ -106,15 +89,10 @@ export default function Page() {
 
 ```js
 // app/layout.js
-import Navbar from '/components/Navbar.js';
-import Footer from '/components/Footer.js';
-
 export default function Layout({ children }) {
     return (
         <div>
-            <Navbar />
             <main>{children}</main>
-            <Footer />
         </div>
     );
 }
@@ -124,12 +102,9 @@ export default function Layout({ children }) {
 
 ```js
 // app/dashboard/layout.js  — wraps all /dashboard/* pages
-import Sidebar from '/components/Sidebar.js';
-
 export default function Layout({ children }) {
     return (
         <div style={{ display: 'flex' }}>
-            <Sidebar />
             <div style={{ flex: 1 }}>{children}</div>
         </div>
     );
@@ -204,8 +179,6 @@ All hooks work exactly like React — **no imports needed**.
 
 ```js
 const [count, setCount] = useState(0);
-const [user, setUser]   = useState(null);
-const [items, setItems] = useState([]);
 
 setCount(prev => prev + 1);
 ```
@@ -213,10 +186,6 @@ setCount(prev => prev + 1);
 ### useEffect
 
 ```js
-useEffect(() => {
-    console.log('mounted');
-}, []);
-
 useEffect(() => {
     document.title = `Count: ${count}`;
 }, [count]);
@@ -260,14 +229,11 @@ const reducer = (state, action) => {
     switch (action.type) {
         case 'increment': return { count: state.count + 1 };
         case 'decrement': return { count: state.count - 1 };
-        case 'reset':     return { count: 0 };
         default:          return state;
     }
 };
 
 const [state, dispatch] = useReducer(reducer, { count: 0 });
-
-dispatch({ type: 'increment' });
 ```
 
 ### useContext
@@ -275,12 +241,10 @@ dispatch({ type: 'increment' });
 ```js
 const ThemeContext = createContext('light');
 
-// Provide value (in layout or parent)
 <ThemeContext.Provider value="dark">
     {children}
 </ThemeContext.Provider>
 
-// Consume anywhere
 const theme = useContext(ThemeContext);
 ```
 
@@ -290,106 +254,21 @@ const theme = useContext(ThemeContext);
 const [name, setName] = useLocalStorage('userName', '');
 ```
 
-### useFetch
-
-```js
-const { data, loading, error } = useFetch('/api/users');
-
-if (loading) return <p>Loading...</p>;
-if (error)   return <p>Error: {error}</p>;
-
-return <pre>{JSON.stringify(data, null, 2)}</pre>;
-```
-
----
-
-## API Routes
-
-API routes run on the **server** (Node.js). Every `.js` file in `api/` becomes an endpoint.
-
-### Basic example
-
-```js
-// api/hello.js  →  GET /api/hello
-const { NextResponse } = require('../_framework/next-response');
-
-async function GET(request) {
-    const { searchParams } = new URL(request.url);
-    const name = searchParams.get('name') || 'World';
-    return NextResponse.json({ message: `Hello, ${name}!` });
-}
-
-module.exports = { GET };
-```
-
-### CRUD example
-
-```js
-// api/users.js  →  /api/users
-const { NextResponse } = require('../_framework/next-response');
-
-async function GET(request) {
-    const users = await User.find();
-    return NextResponse.json(users);
-}
-
-async function POST(request) {
-    const { name, email } = await request.json();
-    if (!name || !email) {
-        return NextResponse.json({ error: 'Name and email required' }, { status: 400 });
-    }
-    const user = await User.create({ name, email });
-    return NextResponse.json(user, { status: 201 });
-}
-
-async function DELETE(request) {
-    const { searchParams } = new URL(request.url);
-    await User.findByIdAndDelete(searchParams.get('id'));
-    return NextResponse.json({ message: 'Deleted' });
-}
-
-module.exports = { GET, POST, DELETE };
-```
-
-### NextResponse
-
-```js
-return NextResponse.json({ data: 'value' });
-return NextResponse.json({ error: 'Not found' }, { status: 404 });
-return NextResponse.redirect('/login');
-return NextResponse.text('Hello');
-```
-
 ---
 
 ## Imports
-
-### Components and pages — no imports needed for JSX or hooks
-
-```js
-// app/dashboard/page.js
-export default function Page() {
-    const [count, setCount] = useState(0); // hooks are global
-    return <h1>Count: {count}</h1>;        // JSX works automatically
-}
-```
 
 ### Importing other files
 
 ```js
 // Absolute path
-import Navbar    from '/components/Navbar.js';
-import connectDB from '/lib/db.js';
-import User      from '/models/User.js';
+import Button from '/components/Button.js';
 
 // @/ alias (same as absolute)
-import connectDB from '@/lib/db';
-import User      from '@/models/User';
+import Button from '@/components/Button';
 
-// npm packages (install first: npm install mongoose)
-import mongoose from 'mongoose';
-import bcrypt   from 'bcryptjs';
-import jwt      from 'jsonwebtoken';
+// npm packages (install first: npm install lodash)
+import _ from 'lodash';
 ```
 
 The dev server resolves bare imports from `node_modules` automatically — no bundler config needed.
@@ -442,137 +321,6 @@ import Button from '/components/Button.js';
 
 ---
 
-## Database
-
-### MongoDB with Mongoose
-
-```bash
-npm install mongoose
-```
-
-```js
-// lib/db.js
-import mongoose from 'mongoose';
-
-let isConnected = false;
-
-export default async function connectDB() {
-    if (isConnected) return;
-    await mongoose.connect(process.env.MONGODB_URI);
-    isConnected = true;
-}
-```
-
-```js
-// models/User.js
-import mongoose from 'mongoose';
-
-const userSchema = new mongoose.Schema({
-    name:     { type: String, required: true },
-    email:    { type: String, required: true, unique: true },
-    password: { type: String, required: true },
-}, { timestamps: true });
-
-export default mongoose.models.User || mongoose.model('User', userSchema);
-```
-
-### Environment variables
-
-Create `.env` in your project root:
-
-```bash
-MONGODB_URI=mongodb://localhost:27017/myapp
-JWT_SECRET=your_secret_key
-```
-
-> Install `dotenv` and add `require('dotenv').config()` at the top of `scripts/dev-server.js` to load `.env` automatically.
-
----
-
-## Calling APIs from Pages
-
-```js
-// GET
-const res = await fetch('/api/users');
-const users = await res.json();
-
-// POST
-const res = await fetch('/api/users', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name: 'Aziz', email: 'aziz@example.com' })
-});
-const result = await res.json();
-```
-
-### Full login example
-
-```js
-export default function Page() {
-    const [email, setEmail]       = useState('');
-    const [password, setPassword] = useState('');
-    const [error, setError]       = useState('');
-    const [loading, setLoading]   = useState(false);
-
-    const handleLogin = async (e) => {
-        e.preventDefault();
-        setLoading(true);
-        setError('');
-
-        try {
-            const res = await fetch('/api/loginUser', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ email, password })
-            });
-
-            const result = await res.json();
-
-            if (!res.ok) {
-                setError(result.error);
-                return;
-            }
-
-            localStorage.setItem('user', JSON.stringify(result));
-            navigate(result.role === 'admin' ? '/admin' : '/dashboard');
-
-        } catch (err) {
-            setError('Something went wrong. Try again.');
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    return (
-        <div style={{ maxWidth: '400px', margin: '80px auto', padding: '0 16px' }}>
-            <h1>Login</h1>
-            <form onSubmit={handleLogin}>
-                <input
-                    type="email"
-                    placeholder="Email"
-                    value={email}
-                    onInput={(e) => setEmail(e.target.value)}
-                    required
-                />
-                <input
-                    type="password"
-                    placeholder="Password"
-                    value={password}
-                    onInput={(e) => setPassword(e.target.value)}
-                    required
-                />
-                {error && <p style={{ color: 'red' }}>{error}</p>}
-                <button type="submit" class="btn btn-primary" disabled={loading}>
-                    {loading ? 'Logging in...' : 'Login'}
-                </button>
-            </form>
-        </div>
-    );
-}
-```
-
----
-
 ## Styling
 
 ### globals.css
@@ -597,24 +345,14 @@ Edit `styles/globals.css` for global styles. Built-in utility classes:
 
 ### Tailwind CSS
 
-Tailwind CSS is included by default via CDN with `primary` and `dark` colors pre-configured:
+If you scaffolded with Tailwind, it is loaded via CDN with `primary` and `dark` colors pre-configured:
 
 ```js
 // Use Tailwind classes directly in any file
 <div class="flex items-center gap-4 p-6 bg-white rounded-lg shadow">
     <h1 class="text-2xl font-bold text-dark">Hello</h1>
-    <button class="bg-primary text-dark font-bold px-4 py-2 rounded-lg">
-        Click me
-    </button>
 </div>
 ```
-
-Custom colors available out of the box:
-
-| Class | Value |
-|-------|-------|
-| `bg-primary` / `text-primary` | `#61dafb` (cyan) |
-| `bg-dark` / `text-dark` | `#282c34` (dark) |
 
 To extend the config, edit the `tailwind.config` block in `index.html`.
 
@@ -629,7 +367,6 @@ npm run dev
 - Serves your app at `http://localhost:3000`
 - Watches all source folders and live-reloads on save
 - Resolves bare imports from `node_modules`
-- Hot-reloads API routes when changed
 
 ```bash
 # Custom port
@@ -647,8 +384,6 @@ PORT=4000 npm run dev
 | `layout.js` convention | ✅ | ✅ |
 | Dynamic routes `[slug]` | ✅ | ✅ |
 | Catch-all `[...slug]` | ✅ | ✅ |
-| API routes | ✅ | ✅ |
-| `NextResponse` | ✅ | ✅ |
 | React hooks | ✅ | ✅ |
 | No imports needed in pages | ✅ | ❌ |
 | ES module imports | ✅ | ✅ |

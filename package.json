@@ -1,6 +1,6 @@
 {
   "name": "create-aziz-app",
-  "version": "3.1.0",
+  "version": "3.1.2",
   "description": "Create Aziz.js apps — lightweight Next.js clone with file-based routing, React hooks, and API routes",
   "keywords": [
     "aziz.js",

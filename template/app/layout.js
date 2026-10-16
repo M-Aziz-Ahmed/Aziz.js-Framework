@@ -1,15 +1,13 @@
-import Navbar from '/components/Navbar.js';
-import Footer from '/components/Footer.js';
-
 // Root layout — wraps every page (like Next.js app/layout.js)
 export default function Layout({ children }) {
     return (
         <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
-            <Navbar />
             <main style={{ flex: 1 }}>
                 {children}
             </main>
-            <Footer />
+            <footer>
+                Built with Aziz.js
+            </footer>
         </div>
     );
 }

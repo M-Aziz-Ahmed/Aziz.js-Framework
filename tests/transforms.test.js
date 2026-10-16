@@ -29,6 +29,16 @@ test('dynamic imports are rewritten', () => {
     assert.match(out, /import\('\/_modules\/lodash'\)/);
 });
 
+test('BUGFIX: prose containing "import … from" inside strings is left alone', () => {
+    const code = 'h("p", null, "Use ", h("code", null, "import"), " statements. The server resolves bare imports from ", h("code", null, "node_modules"), " automatically.");';
+    assert.equal(rewriteImports(code), code);
+});
+
+test('BUGFIX: real imports after a string literal are still rewritten', () => {
+    const code = 'const s = "from nothing";\nimport x from "lodash";';
+    assert.match(rewriteImports(code), /from "\/_modules\/lodash"/);
+});
+
 test('relative and absolute imports are left alone', () => {
     const code = "import a from './a.js';\nimport b from '../b.js';\nimport c from '/c.js';\nconst d = await import('/d.js');";
     assert.equal(rewriteImports(code), code);
