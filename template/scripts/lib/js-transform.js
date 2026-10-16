@@ -26,6 +26,14 @@ function hasBabel() {
     return !!Babel;
 }
 
+// Thrown whenever a module needs compiling but Babel is unavailable.
+// Never fall back to the untransformed source: the browser cannot execute
+// JSX, the module import rejects, and the router silently renders its
+// built-in 404 — a missing dependency disguised as a routing bug.
+const BABEL_MISSING_MESSAGE =
+    '@babel/standalone is not installed, so JSX cannot be compiled. ' +
+    'Run "npm install" in the project folder, then restart the dev server.';
+
 // ─── JSX transform ───────────────────────────────────────────
 
 function isFrameworkPath(filePath) {
@@ -33,11 +41,15 @@ function isFrameworkPath(filePath) {
 }
 
 function transformJSX(code, filename) {
-    if (!Babel) return code;
+    if (!Babel) throw new Error(BABEL_MISSING_MESSAGE);
     const result = Babel.transform(code, {
         filename,
         presets: [
-            ['react', { pragma: 'h', pragmaFrag: 'Fragment' }]
+            // runtime: 'classic' is required. Babel 8 defaults to the automatic
+            // runtime, which rejects an explicit pragma ("pragma and pragmaFrag
+            // cannot be set when runtime is automatic"). We compile to the
+            // global `h`/`Fragment` that boot.js installs, not to jsx-runtime.
+            ['react', { runtime: 'classic', pragma: 'h', pragmaFrag: 'Fragment' }]
         ],
         plugins: [],
         sourceType: 'module',
@@ -163,8 +175,13 @@ function transformModule(code, filePath, mtimeMs) {
     try {
         out = transformJSX(code, path.basename(filePath));
     } catch (err) {
-        console.error(`❌ JSX transform error in ${filePath}:`, err.message);
-        out = `throw new Error(${JSON.stringify('JSX transform error in ' + filePath + ': ' + err.message)});`;
+        if (err.message === BABEL_MISSING_MESSAGE) {
+            // Startup prints an actionable banner — don't repeat it for every file.
+            out = `throw new Error(${JSON.stringify(BABEL_MISSING_MESSAGE)});`;
+        } else {
+            console.error(`❌ JSX transform error in ${filePath}:`, err.message);
+            out = `throw new Error(${JSON.stringify('JSX transform error in ' + filePath + ': ' + err.message)});`;
+        }
     }
     out = rewriteImports(out);
     cache.set(filePath, { mtimeMs, code: out });
@@ -185,6 +202,7 @@ function cacheSize() {
 
 module.exports = {
     hasBabel,
+    BABEL_MISSING_MESSAGE,
     transformJSX,
     rewriteImports,
     transformModule,

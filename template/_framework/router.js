@@ -15,6 +15,7 @@
 // ============================================================
 
 import { h, mountPage, disposeFibers, beginRender, materialize, appendNodes } from '/_framework/runtime.js';
+import { useState, useCallback } from '/_framework/hooks.js';
 import { normalizePath, resolveRoute, collectLayouts } from '/_framework/route-match.js';
 
 // Registered routes / layouts (populated by the dev server manifest)
@@ -25,13 +26,35 @@ let dev = true;
 
 // ─── Navigation ──────────────────────────────────────────────
 
-export function navigate(path) {
-    history.pushState(null, '', path);
+export function navigate(path, { replace = false, scroll = true } = {}) {
+    if (replace) history.replaceState(null, '', path);
+    else history.pushState(null, '', path);
     router.render();
+    if (scroll) window.scrollTo(0, 0);
+}
+
+export function replace(path) {
+    navigate(path, { replace: true });
+}
+
+export function back() { history.back(); }
+export function forward() { history.forward(); }
+export function refresh() { router.render(); }
+
+// Server-style redirect from inside a component or an effect.
+export function redirect(url, options) {
+    navigate(url, { replace: true, ...options });
+}
+
+// Thrown by notFound() to render the 404 screen from a page.
+const NOT_FOUND_SIGNAL = 'AZIZ_NOT_FOUND';
+
+export function notFound() {
+    throw new Error(NOT_FOUND_SIGNAL);
 }
 
 // <Link href="/about">About</Link>
-export function Link({ href, children, className, style, onClick, ...rest }) {
+export function Link({ href, children, className, style, onClick, replace = false, scroll = true, prefetch = false, ...rest }) {
     return h('a', {
         ...rest,
         href,
@@ -44,7 +67,7 @@ export function Link({ href, children, className, style, onClick, ...rest }) {
             if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
             if (!href || /^([a-z]+:)?\/\//i.test(href) || href.startsWith('#') || href.startsWith('mailto:')) return;
             e.preventDefault();
-            navigate(href);
+            navigate(href, { replace, scroll });
         },
     }, ...(Array.isArray(children) ? children : [children]));
 }
@@ -54,17 +77,59 @@ export function Link({ href, children, className, style, onClick, ...rest }) {
 export function useRouter() {
     return {
         pathname: normalizePath(window.location.pathname),
-        push: navigate,
-        replace: (path) => { history.replaceState(null, '', path); router.render(); },
-        back: () => history.back(),
-        forward: () => history.forward(),
-        refresh: () => router.render(),
+        push: (path, options) => navigate(path, options),
+        replace: (path, options) => navigate(path, { ...options, replace: true }),
+        back,
+        forward,
+        refresh,
+        // Aziz.js has no route prefetching (see README) — kept for API parity.
+        prefetch: () => Promise.resolve(),
         params: router.currentParams || {},
     };
 }
 
 export function useParams() {
     return router.currentParams || {};
+}
+
+// Next.js parity: read the current path without reaching for window.location.
+export function usePathname() {
+    return normalizePath(window.location.pathname);
+}
+
+// Next.js parity: transition state. Client-side routing in Aziz.js is
+// synchronous — there is no server round-trip to await — so isPending is
+// always false between events.
+export function useNavigation() {
+    return {
+        isPending: false,
+        state: 'idle',
+        ...useRouter(),
+    };
+}
+
+// Next.js parity: the real App Router transition hook. Wraps a callback so
+// async work reports isPending while it runs; synchronous callbacks resolve
+// immediately because there is nothing to suspend on.
+export function useTransition() {
+    const [isPending, setIsPending] = useState(false);
+
+    const startTransition = useCallback((callback) => {
+        let result;
+        try {
+            result = callback();
+        } catch (err) {
+            setIsPending(false);
+            throw err;
+        }
+        if (result && typeof result.then === 'function') {
+            setIsPending(true);
+            return result.finally(() => setIsPending(false));
+        }
+        return result;
+    }, []);
+
+    return [isPending, startTransition];
 }
 
 export function useSearchParams() {
@@ -74,6 +139,9 @@ export function useSearchParams() {
         getAll: (key) => params.getAll(key),
         has: (key) => params.has(key),
         entries: () => params.entries(),
+        keys: () => params.keys(),
+        values: () => params.values(),
+        forEach: (fn) => params.forEach(fn),
         toString: () => params.toString(),
     };
 }
@@ -174,11 +242,20 @@ export const router = {
     },
 
     async init() {
+        // Navigation API — globals so pages need no imports.
         window.navigate = navigate;
         window.useRouter = useRouter;
         window.useParams = useParams;
         window.useSearchParams = useSearchParams;
+        window.usePathname = usePathname;
+        window.useNavigation = useNavigation;
+        window.useTransition = useTransition;
         window.Link = Link;
+        window.redirect = redirect;
+        window.notFound = notFound;
+        window.back = back;
+        window.forward = forward;
+        window.refresh = refresh;
         window.__rerenderPage = () => this.render();
 
         await this.loadRoutes();
@@ -249,7 +326,16 @@ export const router = {
 
         const saved = captureFocus();
 
-        mountPage(PageComponent, layoutComponents, root, 'page:' + pathname);
+        try {
+            mountPage(PageComponent, layoutComponents, root, 'page:' + pathname);
+        } catch (err) {
+            // A page (or its data loader) called notFound() — swap in the 404 screen.
+            if (!err || err.message !== NOT_FOUND_SIGNAL) throw err;
+            disposeFibers();
+            const NotFound = (notFoundModule && notFoundModule.default) || DefaultNotFound;
+            mountPage(NotFound, layoutComponents, root, 'notfound:' + pathname);
+            applyMetadata(layoutModules, notFoundModule);
+        }
 
         restoreFocus(root, saved);
 

@@ -14,7 +14,12 @@ function copyFramework(names) {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'aziz-test-'));
     fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ type: 'module' }));
     for (const name of names) {
-        fs.copyFileSync(path.join(FRAMEWORK_DIR, name), path.join(dir, name));
+        const src = fs.readFileSync(path.join(FRAMEWORK_DIR, name), 'utf8');
+        // Framework modules import siblings by absolute browser path
+        // ("/_framework/runtime.js"), which Node's ESM loader cannot resolve.
+        // Rewrite to sibling-relative so the copy runs under Node.
+        const rewritten = src.replace(/(['"])\/_framework\/([^'"]+)\1/g, "'./$2'");
+        fs.writeFileSync(path.join(dir, name), rewritten);
     }
     return dir;
 }
@@ -32,6 +37,7 @@ async function loadFramework(names) {
         'hooks.js': 'hooks',
         'api.js': 'api',
         'route-match.js': 'routeMatch',
+        'router.js': 'router',
     };
     for (const name of names) {
         out[mapping[name] || name] = await import(moduleURL(dir, name));

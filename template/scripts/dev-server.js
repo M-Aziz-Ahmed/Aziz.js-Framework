@@ -25,9 +25,84 @@ const PRODUCTION = process.argv.includes('--production') || process.env.NODE_ENV
 const clients = new Set();
 let apiRoutes = [];
 
+// ─── Files that must never reach the browser ───────────────────
+//
+// Aziz.js has no bundler, so every importable module is served straight
+// from disk. That is what makes `import User from '@/models/User'` work —
+// but it also means anything on disk is one HTTP request away, including
+// .env secrets. These rules are the boundary between "code the browser
+// may import" and "everything else".
+
+const BLOCKED_FILES = new Set([
+    'package.json',
+    'package-lock.json',
+    'npm-shrinkwrap.json',
+    'yarn.lock',
+    'pnpm-lock.yaml',
+    'bun.lockb',
+    'tsconfig.json',
+    'jsconfig.json',
+]);
+
+// Directories that only ever hold server-side code or data.
+const BLOCKED_DIRS = new Set([
+    'node_modules',   // reachable via /_modules/<pkg> instead
+    'server',         // convention: server-only modules
+    'data',           // convention: flat-file persistence (sessions, users)
+]);
+
+// scripts/ holds the dev server itself, but index.html needs one file from it.
+const ALLOWED_SCRIPT_FILES = new Set(['live-reload-client.js']);
+
+// Explicit server-only modules: anything named *.server.{js,mjs,jsx}
+const SERVER_MODULE_RE = /\.server\.(m?js|jsx)$/;
+
+function forbiddenReason(urlPath) {
+    const parts = urlPath.split('/').filter(Boolean);
+    if (parts.length === 0) return null;
+
+    // Any dotfile or dot-directory: .env, .env.local, .git/config, .npmrc …
+    if (parts.some(p => p.startsWith('.'))) return 'dotfile';
+
+    const file = parts[parts.length - 1];
+
+    if (BLOCKED_FILES.has(file)) return 'project metadata file';
+
+    if (parts[0] === 'scripts') {
+        return ALLOWED_SCRIPT_FILES.has(file) ? null : 'dev-server internals';
+    }
+
+    if (parts.some(p => BLOCKED_DIRS.has(p))) return 'server-only directory';
+    if (SERVER_MODULE_RE.test(file)) return 'server-only module';
+
+    return null;
+}
+
+function box(lines) {
+    const width = Math.max(...lines.map(l => l.length)) + 2;
+    const bar = '─'.repeat(width + 2);
+    return [
+        '',
+        '┌' + bar + '┐',
+        ...lines.map(l => '│ ' + l.padEnd(width) + ' │'),
+        '└' + bar + '┘',
+        ''
+    ].join('\n');
+}
+
 if (!hasBabel()) {
-    console.warn('⚠️  @babel/standalone not found — JSX files will not be compiled.');
-    console.warn('   Run: npm install --save-dev @babel/standalone');
+    console.log(box([
+        '@babel/standalone is NOT installed — JSX cannot be compiled.',
+        '',
+        'Every page and layout will fail to load in the browser, so the',
+        'router falls back to its built-in 404 page. This looks like a',
+        'routing bug, but it is a missing dependency.',
+        '',
+        `Fix:  ${fs.existsSync(path.join(ROOT, 'node_modules')) ? 'npm install --save-dev @babel/standalone' : 'npm install'}`,
+        `      in ${ROOT}`,
+        '',
+        'Then restart the dev server.',
+    ]));
 }
 
 console.log(`🚀 Aziz.js dev server starting${PRODUCTION ? ' (production mode)' : ''}...\n`);
@@ -188,6 +263,18 @@ const server = http.createServer(async (req, res) => {
 
     // ── Static files + SPA fallback
     let filePath;
+
+    // Refuse secrets and server internals before touching the filesystem.
+    const blocked = forbiddenReason(urlWithoutQuery);
+    if (blocked) {
+        res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8', ...NO_CACHE });
+        res.end(JSON.stringify({
+            error: 'Not found',
+            detail: `'${urlWithoutQuery}' is not served by Aziz.js (${blocked}).`,
+            hint: 'Server-only code belongs in api/, server/, or a *.server.mjs file — import it from an API route, never from a page.',
+        }));
+        return;
+    }
 
     try {
         if (urlWithoutQuery === '/' || urlWithoutQuery === '') {
