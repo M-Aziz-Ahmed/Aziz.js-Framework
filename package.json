@@ -28,5 +28,8 @@
     "postversion": "git push && git push --tags",
     "dev": "cd template && node scripts/dev-server.js",
     "test": "node --test \"tests/**/*.test.js\""
+  },
+  "devDependencies": {
+    "@babel/standalone": "^7.0.0"
   }
 }

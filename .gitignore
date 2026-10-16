@@ -1,0 +1,24 @@
+# Dependencies — the repo tracks no vendored packages.
+# The test suite resolves @babel/standalone from the root install; see
+# devDependencies in package.json.
+node_modules/
+
+# Packed build artifacts. npm publish generates these from `files`
+# (["bin", "template"]); committing them only serves to go stale.
+*.tgz
+
+# Logs
+*.log
+npm-debug.log*
+yarn-error.log*
+
+# OS cruft
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor / IDE
+.vscode/*
+!.vscode/settings.json
+.idea/
+*.swp
