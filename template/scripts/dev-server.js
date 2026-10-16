@@ -108,12 +108,23 @@ if (!hasBabel()) {
 console.log(`🚀 Aziz.js dev server starting${PRODUCTION ? ' (production mode)' : ''}...\n`);
 
 // ─── Route Manifest ──────────────────────────────────────────
-// Scans app/ and builds the page/layout/not-found list for the client router.
+// Scans app/ and builds the page/layout/not-found/loading/error list for the
+// client router.
+
+const PAGE_NAMES     = ['page.js', 'page.jsx'];
+const LAYOUT_NAMES   = ['layout.js', 'layout.jsx'];
+const LOADING_NAMES  = ['loading.js', 'loading.jsx'];
+const ERROR_NAMES    = ['error.js', 'error.jsx'];
+// Next.js calls it not-found.js; 404.js is accepted as a friendlier alias.
+const NOTFOUND_NAMES = ['not-found.js', 'not-found.jsx', '404.js', '404.jsx'];
 
 function buildRouteManifest() {
     const manifest = [];
     const appDir = path.join(ROOT, 'app');
     if (!fs.existsSync(appDir)) return manifest;
+
+    const filePathFor = (routeBase, fileName) =>
+        '/app' + (routeBase === '/' ? '' : routeBase) + '/' + fileName;
 
     function scan(dir, routeBase) {
         const entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -125,18 +136,23 @@ function buildRouteManifest() {
                 // Keep [slug] as-is — the router matcher expects bracket syntax
                 const segment = entry.name;
                 scan(fullPath, routeBase === '/' ? '/' + segment : routeBase + '/' + segment);
-            } else if (entry.name === 'page.js' || entry.name === 'page.jsx') {
-                const pathname = routeBase || '/';
-                const filePath = '/app' + (pathname === '/' ? '' : pathname) + '/' + entry.name;
-                manifest.push({ type: 'page', pathname, filePath });
-            } else if (entry.name === 'layout.js' || entry.name === 'layout.jsx') {
-                const pathname = routeBase || '/';
-                const filePath = '/app' + (pathname === '/' ? '' : pathname) + '/' + entry.name;
-                manifest.push({ type: 'layout', pathname, filePath });
-            } else if (entry.name === 'not-found.js' || entry.name === 'not-found.jsx') {
-                if (routeBase === '/') {
-                    manifest.push({ type: 'not-found', pathname: '/not-found', filePath: '/app/not-found.js' });
-                }
+                continue;
+            }
+
+            const name = entry.name;
+
+            if (PAGE_NAMES.includes(name)) {
+                manifest.push({ type: 'page', pathname: routeBase || '/', filePath: filePathFor(routeBase, name) });
+            } else if (LAYOUT_NAMES.includes(name)) {
+                manifest.push({ type: 'layout', pathname: routeBase || '/', filePath: filePathFor(routeBase, name) });
+            } else if (LOADING_NAMES.includes(name)) {
+                manifest.push({ type: 'loading', pathname: routeBase || '/', filePath: filePathFor(routeBase, name) });
+            } else if (ERROR_NAMES.includes(name)) {
+                manifest.push({ type: 'error', pathname: routeBase || '/', filePath: filePathFor(routeBase, name) });
+            } else if (NOTFOUND_NAMES.includes(name) && routeBase === '/') {
+                // filePath must use the real name — the old code hardcoded .js,
+                // which broke not-found.jsx.
+                manifest.push({ type: 'not-found', pathname: '/not-found', filePath: filePathFor(routeBase, name) });
             }
             // route.js files are API routes — handled by api-router, not the page router
         }
@@ -404,6 +420,15 @@ function notifyClients() {
 }
 
 // ─── File Watcher (development only) ─────────────────────────
+//
+// NOTE: on Windows, Node's directory watcher can abort the process with
+// "Assertion failed: !_wcsnicmp(filename, dir, dirlen)" (src\win\fs-event.c).
+// It is a native assertion that try/catch cannot intercept, it is unrelated
+// to recursive:true (a non-recursive watcher hits it too), and it only shows
+// up on trees with nested subdirectories — roughly 1 start in 8 on the
+// machine this was observed on. It is reproducible enough to be worth
+// reporting upstream, and rare enough that switching watcher strategies
+// costs more than it saves. Restarting the dev server always clears it.
 
 const watchDirs = ['app', 'api', 'components', 'lib', 'models', 'styles', '_framework'];
 const SERVER_CODE_DIRS = new Set(['api', 'lib', 'models']);

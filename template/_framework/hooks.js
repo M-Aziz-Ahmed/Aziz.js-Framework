@@ -38,6 +38,9 @@ export function initHooks() {
     window.useLocalStorage = useLocalStorage;
     window.useFetch        = useFetch;
     window.useApi          = useFetch;
+    window.onLoadState     = onLoadState;
+    window.getPendingLoads = getPendingLoads;
+    window.clearFetchCache = clearFetchCache;
     window.resetHooks      = resetHooks;
     window.prepareHooks    = prepareHooks;
     window.finishHooks     = finishHooks;
@@ -212,6 +215,59 @@ export function useLocalStorage(key, initial) {
     return [value, set];
 }
 
+// ─── Load tracking ───────────────────────────────────────────
+//
+// A tiny registry of in-flight requests so the router can tell when a route
+// has settled. This is what lets app/<route>/loading.js work without a real
+// Suspense renderer: after boot every page module is already imported, so
+// data fetching is the only genuinely async part of a navigation.
+
+let pendingLoads = 0;
+const loadListeners = new Set();
+
+function emitLoadState() {
+    for (const fn of loadListeners) {
+        try { fn(pendingLoads); } catch { /* listener errors must not break fetching */ }
+    }
+}
+
+export function beginLoad() {
+    pendingLoads++;
+    emitLoadState();
+}
+
+export function endLoad() {
+    pendingLoads = Math.max(0, pendingLoads - 1);
+    emitLoadState();
+}
+
+export function getPendingLoads() {
+    return pendingLoads;
+}
+
+export function onLoadState(fn) {
+    loadListeners.add(fn);
+    fn(pendingLoads);
+    return () => loadListeners.delete(fn);
+}
+
+// ─── Response cache ──────────────────────────────────────────
+//
+// Re-mounting a page (for example swapping loading.js out for it) must not
+// re-hit the network. Entries are keyed by URL and expire quickly.
+
+const responseCache = new Map();
+const CACHE_TTL = 5000;
+
+export function clearFetchCache() {
+    responseCache.clear();
+}
+
+function cacheKey(url, options) {
+    const method = (options.method || 'GET').toUpperCase();
+    return method === 'GET' ? url : url + '|' + JSON.stringify(options.body || null);
+}
+
 // ─── useFetch ────────────────────────────────────────────────
 
 export function useFetch(url, options = {}) {
@@ -230,7 +286,24 @@ export function useFetch(url, options = {}) {
         const controller = new AbortController();
         abortRef.current = controller;
 
+        // Serve a fresh cache entry immediately instead of refetching. This is
+        // what makes swapping loading.js out for the page cheap.
+        const key = cacheKey(url, options);
+        const cached = responseCache.get(key);
+        if (cached && Date.now() - cached.at < CACHE_TTL && (options.force || cached.data !== undefined)) {
+            setState({ data: cached.data, loading: false, error: null, status: cached.status });
+            return;
+        }
+
         setState(prev => ({ ...prev, loading: true, error: null }));
+
+        beginLoad();
+        let counted = true;
+        const settle = () => {
+            if (!counted) return;
+            counted = false;
+            endLoad();
+        };
 
         fetch(url, { ...options, signal: controller.signal })
             .then(async (res) => {
@@ -250,14 +323,17 @@ export function useFetch(url, options = {}) {
                     err.data = data;
                     throw err;
                 }
+                responseCache.set(key, { data, status: res.status, at: Date.now() });
                 setState({ data, loading: false, error: null, status: res.status });
+                settle();
             })
             .catch((err) => {
-                if (err.name === 'AbortError') return;
+                if (err.name === 'AbortError') { settle(); return; }
                 setState(prev => ({ ...prev, loading: false, error: err.message, status: err.status || null }));
+                settle();
             });
 
-        return () => controller.abort();
+        return () => { controller.abort(); settle(); };
     }, [url, nonce]);
 
     const refetch = useCallback(() => setNonce(n => n + 1), []);

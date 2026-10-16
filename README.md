@@ -230,6 +230,8 @@ export default function Page() {
 | `app/blog/[slug]/page.js` | `/blog/:slug` |
 | `app/docs/[...path]/page.js` | `/docs/*` (one or more segments) |
 | `app/not-found.js` | your custom 404 screen |
+| `app/loading.js` | shown while this route's data loads |
+| `app/error.js` | catches render errors in this route |
 
 Directory names are **case-sensitive**. `app/MyPage/page.js` serves `/MyPage` only — `/mypage` will 404.
 
@@ -304,7 +306,7 @@ export default function Page() {
 }
 ```
 
-**Custom 404.** Create `app/not-found.js`:
+**Custom 404.** Create `app/not-found.js` (or `app/404.js` — both names work):
 
 ```jsx
 export default function NotFound() {
@@ -312,7 +314,37 @@ export default function NotFound() {
 }
 ```
 
-> Use the `.js` extension. `not-found.jsx` is accepted by the scanner but the generated route manifest hardcodes the `.js` path, so a `.jsx` file will not be found.
+**Loading UI.** Create `app/loading.js` and it is shown while the route's data is still in flight:
+
+```jsx
+// app/loading.js
+export default function Loading() {
+    return <div className="skeleton">Loading…</div>;
+}
+```
+
+Three things worth knowing, because they differ from Next.js:
+
+1. **It only appears if the route is slow.** Page modules are all imported at boot, so a navigation has no module-fetch window — data fetching is the only async part. `loading.js` appears only if requests are still in flight **200 ms** after the route renders, then the page replaces it. Fast routes never flash a spinner.
+2. **It inherits by segment,** exactly like layouts. `app/loading.js` covers every route; `app/blog/loading.js` overrides it for `/blog/*` only.
+3. **No file means no spinner.** To turn it off for a page, simply delete the nearest `loading.js`. Do not add a magic `'no loading'` comment — absence of the file *is* the opt-out, and it matches Next.js.
+
+**Error boundary.** Create `app/error.js` and render failures stop white-screening the app:
+
+```jsx
+// app/error.js — receives { error, reset }, same shape as Next.js
+export default function ErrorBoundary({ error, reset }) {
+    return (
+        <div>
+            <h2>Something broke</h2>
+            <p>{error.message}</p>
+            <button onClick={reset}>Try again</button>
+        </div>
+    );
+}
+```
+
+It inherits by segment like `layout.js` and `loading.js`, so you can trap errors around one subtree without catching the whole app. Without an `error.js`, the error propagates and is logged — the framework does not silently swallow bugs.
 
 ### Phase 2 — State and data
 
@@ -598,19 +630,23 @@ Stated plainly, because a framework README that only lists strengths is marketin
   import { NextResponse } from '../../_framework/next-response.js';
   ```
 - **Do not mix `require()` and `export`** in one API route file.
-- **`.jsx` is supported for pages, layouts, and API routes — except `not-found.jsx`, which is broken.** Use `not-found.js`. See Phase 1.
+- **`.jsx` is supported for pages, layouts, API routes, `loading.js`, `error.js` and `404.js`.** The old manifest bug that hardcoded the `.js` path is fixed — the manifest now points at the real filename.
 - **Directory names are case-sensitive.**
 - **Catch-all routes must be the final segment** and require at least one segment.
 - **Restart the dev server after `npm install`.** The Babel lookup happens once at process start and is never retried.
 - **Pin `@babel/standalone` to `^7`.** Do not run a bare `npm install --save-dev @babel/standalone` on an existing project — that now resolves **v8**, whose default *automatic* JSX runtime conflicts with the classic `h()`/`Fragment` compilation this framework relies on. v3.1.2 works with either major, but the template pins `^7.0.0`; leave it alone unless you have tested it.
+- **`useFetch` caches GET responses for 5 seconds.** Navigating away and back, or swapping `loading.js` out for a page, will not re-hit the API inside that window. Call `refetch()` to force it, or `clearFetchCache()` (global) to drop everything.
+- **Known upstream issue on Windows:** Node's directory watcher can abort the whole process at startup with `Assertion failed: !_wcsnicmp(filename, dir, dirlen)` (from `src\win\fs-event.c`). It is a native assertion that `try/catch` cannot intercept. Measured on this machine: roughly **1 start in 8** on projects with nested subdirectories (e.g. `app/blog/[slug]`), and 0 in 5 on a flat project. It is **not** caused by `recursive: true` — a non-recursive watcher hits it too — so switching watcher strategy does not help. Just restart the dev server.
 
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
+| Server dies instantly on Windows, `Assertion failed: !_wcsnicmp` | Node's native directory watcher (upstream bug) | Restart the dev server |
 | 404 on **every** page | `npm install` was never run — JSX is served raw and the module import fails | `npm install`, then **restart** the dev server |
 | 404 on one page only | File is not `page.js` (e.g. `index.js` or `page.tsx`) | Rename to `app/<route>/page.js` |
 | 404 on a `server/`, `data/`, `.env` or `*.server.mjs` path | Working as intended — these are never served | Import them from an API route, not a page |
+| A spinner flashes for a moment | A route crossed the 200 ms guard | Delete the nearest `loading.js` — absence is the opt-out |
 | "JSX transform error" | Syntax error in a page or component | Fix the syntax; the message names the file |
 | "Module not found" | Bare import not installed | `npm install <package>` |
 | API route 404 | File not discovered, or `require`/`export` mixed | Check the `api/` or `app/api/` path and module style |

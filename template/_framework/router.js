@@ -15,14 +15,38 @@
 // ============================================================
 
 import { h, mountPage, disposeFibers, beginRender, materialize, appendNodes } from '/_framework/runtime.js';
-import { useState, useCallback } from '/_framework/hooks.js';
+import { useState, useCallback, getPendingLoads, onLoadState } from '/_framework/hooks.js';
 import { normalizePath, resolveRoute, collectLayouts } from '/_framework/route-match.js';
 
 // Registered routes / layouts (populated by the dev server manifest)
 const routes = {};
 const layouts = [];
+const loadings = [];
+const errors = [];
 let notFoundModule = null;
 let dev = true;
+
+// How long a route transition may stay pending before loading.js appears.
+// Below this the route is "fast enough" and showing a spinner would only flash.
+const LOADING_DELAY = 200;
+
+// The nearest loading.js / error.js for a path — same prefix-inheritance
+// rules as layouts, so app/loading.js covers every route beneath it and a
+// deeper app/blog/loading.js overrides it for /blog only.
+function collectNearest(list, pathname) {
+    const matches = list.filter(e => matchesSegment(e.path, pathname));
+    if (matches.length === 0) return null;
+    matches.sort((a, b) => b.path.split('/').filter(Boolean).length - a.path.split('/').filter(Boolean).length);
+    return matches[0];
+}
+
+function matchesSegment(pattern, pathname) {
+    const p = pattern.split('/').filter(Boolean);
+    const s = pathname.split('/').filter(Boolean);
+    if (p.length > s.length) return false;
+    for (let i = 0; i < p.length; i++) if (p[i] !== s[i]) return false;
+    return true;
+}
 
 // ─── Navigation ──────────────────────────────────────────────
 
@@ -228,6 +252,11 @@ export const router = {
     layouts,
     currentParams: {},
     _lastPathname: null,
+    // Transition bookkeeping for loading.js. _epoch invalidates stale timers
+    // so a fast navigation can never be replaced by a slow one's spinner.
+    _epoch: 0,
+    _showingLoading: false,
+    _pendingAtStart: 0,
 
     register(pathname, module) {
         routes[pathname] = module;
@@ -235,6 +264,14 @@ export const router = {
 
     registerLayout(pathname, module) {
         layouts.push({ path: pathname, module });
+    },
+
+    registerLoading(pathname, module) {
+        loadings.push({ path: pathname, module });
+    },
+
+    registerError(pathname, module) {
+        errors.push({ path: pathname, module });
     },
 
     registerNotFound(module) {
@@ -286,6 +323,8 @@ export const router = {
                 const mod = await import(url);
                 if (type === 'page') this.register(pathname, mod);
                 else if (type === 'layout') this.registerLayout(pathname, mod);
+                else if (type === 'loading') this.registerLoading(pathname, mod);
+                else if (type === 'error') this.registerError(pathname, mod);
                 else if (type === 'not-found') this.registerNotFound(mod);
             } catch (err) {
                 console.error(`❌ Failed to load ${filePath}:`, err);
@@ -293,8 +332,57 @@ export const router = {
         }
     },
 
+// ── Route transition (drives loading.js) ─────────────────
+//
+// Every page module is imported up front at boot, so a navigation has no
+// module-fetch window — data fetching is the only genuinely async part.
+// We therefore show the nearest loading.js only if the route still has
+// requests in flight after LOADING_DELAY, which avoids flashing a spinner
+// on fast routes. Called *after* the page has mounted, because the page's
+// effects are what start those requests.
+
+_beginTransition(pathname, loadingComponent, pendingAtStart) {
+        const epoch = ++this._epoch;
+        this._finishTransition(this._epoch - 1);
+        this._showingLoading = false;
+
+        this._pendingAtStart = pendingAtStart;
+        if (!loadingComponent) return;
+
+        // NOTE: the page's own requests start in a microtask (useEffect queues
+        // with queueMicrotask), so they are NOT running yet at this point. We
+        // therefore always arm the timer and let it inspect reality at
+        // LOADING_DELAY rather than deciding synchronously.
+        this._transitionStop = onLoadState((pending) => {
+            if (epoch !== this._epoch || !this._showingLoading) return;
+            if (pending > this._pendingAtStart) return;
+            // Everything settled — put the real page back.
+            this._showingLoading = false;
+            this._finishTransition(epoch);
+            this._renderAt(pathname);
+        });
+
+        this._transitionTimer = setTimeout(() => {
+            if (epoch !== this._epoch || this._showingLoading) return;
+            if (getPendingLoads() > this._pendingAtStart) {
+                this._showingLoading = true;
+                this._renderAt(pathname, { forceLoading: true });
+            }
+        }, LOADING_DELAY);
+},
+
+_finishTransition(epoch) {
+    if (epoch !== this._epoch) return;
+    clearTimeout(this._transitionTimer);
+    this._transitionTimer = null;
+    if (this._transitionStop) { this._transitionStop(); this._transitionStop = null; }
+},
+
     async render() {
-        const pathname = normalizePath(window.location.pathname);
+        return this._renderAt(normalizePath(window.location.pathname));
+    },
+
+    async _renderAt(pathname, { forceLoading = false } = {}) {
         const root = document.getElementById('root');
         if (!root) return;
 
@@ -306,6 +394,8 @@ export const router = {
         }
 
         const scrollY = isNewRoute ? 0 : window.scrollY;
+        // Baseline before the page's effects kick off their requests.
+        const pendingAtStart = getPendingLoads();
 
         const match = resolveRoute(routes, pathname);
         this.currentParams = match ? match.params : {};
@@ -322,25 +412,55 @@ export const router = {
             pageModule = null;
         }
 
-        applyMetadata(layoutModules, pageModule);
+        // Show the route's loading.js instead of the page while data settles.
+        if (forceLoading) {
+            const loading = collectNearest(loadings, pathname);
+            const LoadingComponent = loading && loading.module.default;
+            if (LoadingComponent) {
+                const savedL = captureFocus();
+                mountPage(LoadingComponent, layoutComponents, root, 'loading:' + pathname);
+                restoreFocus(root, savedL);
+                if (isNewRoute) window.scrollTo(0, 0);
+                return;
+            }
+        }
 
+        const boundary = collectNearest(errors, pathname);
+        const ErrorComponent = boundary && boundary.module.default;
         const saved = captureFocus();
 
         try {
             mountPage(PageComponent, layoutComponents, root, 'page:' + pathname);
+            if (forceLoading) this._finishTransition(this._epoch);
         } catch (err) {
-            // A page (or its data loader) called notFound() — swap in the 404 screen.
-            if (!err || err.message !== NOT_FOUND_SIGNAL) throw err;
-            disposeFibers();
-            const NotFound = (notFoundModule && notFoundModule.default) || DefaultNotFound;
-            mountPage(NotFound, layoutComponents, root, 'notfound:' + pathname);
-            applyMetadata(layoutModules, notFoundModule);
+            // A page called notFound() — swap in the 404 screen.
+            if (err && err.message === NOT_FOUND_SIGNAL) {
+                disposeFibers();
+                const NotFound = (notFoundModule && notFoundModule.default) || DefaultNotFound;
+                mountPage(NotFound, layoutComponents, root, 'notfound:' + pathname);
+                applyMetadata(layoutModules, notFoundModule);
+            } else if (ErrorComponent) {
+                // A real render error — hand it to the nearest error boundary
+                // instead of white-screening the app. Next.js shape:
+                // error.js receives { error, reset }.
+                disposeFibers();
+                console.error('❌ Error while rendering', pathname, err);
+                mountPage(ErrorComponent, layoutComponents, root, 'error:' + pathname, {
+                    error: err,
+                    reset: () => { this._epoch++; this._showingLoading = false; this.render(); },
+                });
+                applyMetadata(layoutModules, null);
+            } else {
+                throw err;
+            }
         }
 
         restoreFocus(root, saved);
 
         if (isNewRoute) window.scrollTo(0, 0);
         else if (scrollY) window.scrollTo(0, scrollY);
+
+        this._beginTransition(pathname, collectNearest(loadings, pathname), pendingAtStart);
     },
 };
 

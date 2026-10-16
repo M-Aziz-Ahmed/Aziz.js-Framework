@@ -276,3 +276,134 @@ test('a real page error is not swallowed as a 404', async () => {
     await assert.rejects(() => router.render(), /real bug/,
         'only notFound() should be intercepted as a 404');
 });
+
+// ─── loading.js / error.js ───────────────────────────────────
+
+const FRAMEWORK = ['router.js', 'runtime.js', 'hooks.js', 'route-match.js'];
+async function loadRouter() {
+    const mod = await loadFramework(FRAMEWORK);
+    globalThis.h = mod.runtime.h;
+    return mod;
+}
+
+test('error.js catches a render error and receives { error, reset }', async () => {
+    const { root } = mountHarness('/boom');
+    const { router: mod } = await loadRouter();
+    const router = mod.router;
+
+    router.register('/boom', { default: () => { throw new Error('kaboom'); } });
+    let received = null;
+    router.registerError('/', {
+        default: function Boundary(props) {
+            received = props;
+            return h('p', null, 'BOUNDARY: ' + (props.error && props.error.message));
+        },
+    });
+
+    await router.render();
+
+    assert.match(root.textContent, /BOUNDARY: kaboom/,
+        `expected the error boundary, got: ${JSON.stringify(root.textContent)}`);
+    assert.ok(received, 'error.js must receive props');
+    assert.ok(received.error instanceof Error);
+    assert.equal(typeof received.reset, 'function', 'error.js must receive reset()');
+});
+
+test('without error.js the render error still propagates', async () => {
+    mountHarness('/boom2');
+    const { router: mod } = await loadRouter();
+    const router = mod.router;
+    router.register('/boom2', { default: () => { throw new Error('kaboom'); } });
+    await assert.rejects(() => router.render(), /kaboom/);
+});
+
+// A page whose requests start in an effect, exactly like useFetch does.
+function slowPage(hooks, label) {
+    return function Page() {
+        hooks.useEffect(() => {
+            hooks.beginLoad();
+            hooks.beginLoad();
+        }, []);
+        return h('p', null, label);
+    };
+}
+
+test('loading.js replaces the page while requests are in flight, then restores it', async () => {
+    const { root } = mountHarness('/slow');
+    const { router: mod, hooks } = await loadRouter();
+    const router = mod.router;
+
+    router.register('/slow', { default: slowPage(hooks, 'REAL PAGE') });
+    router.registerLoading('/', { default: () => h('p', null, 'LOADING UI') });
+
+    await router.render();
+    await sleep(20);
+    assert.match(root.textContent, /REAL PAGE/, 'page paints first');
+
+    await sleep(320);                       // past the 200ms guard
+    assert.match(root.textContent, /LOADING UI/,
+        `expected loading.js, got: ${JSON.stringify(root.textContent)}`);
+
+    hooks.endLoad();
+    hooks.endLoad();
+    await sleep(60);
+    assert.match(root.textContent, /REAL PAGE/,
+        `expected the page to be restored, got: ${JSON.stringify(root.textContent)}`);
+});
+
+test('a fast route never flashes loading.js', async () => {
+    const { root } = mountHarness('/fast');
+    const { router: mod, hooks } = await loadRouter();
+    const router = mod.router;
+
+    router.register('/fast', { default: slowPage(hooks, 'REAL PAGE') });
+    router.registerLoading('/', { default: () => h('p', null, 'LOADING UI') });
+
+    await router.render();
+    // Resolve well inside the 200ms guard.
+    await sleep(30);
+    hooks.endLoad();
+    hooks.endLoad();
+    await sleep(320);
+
+    assert.doesNotMatch(root.textContent, /LOADING UI/,
+        'a route that resolves quickly must not show a spinner');
+    assert.match(root.textContent, /REAL PAGE/);
+});
+
+test('no loading.js means no transition machinery', async () => {
+    const { root } = mountHarness('/plain');
+    const { router: mod, hooks } = await loadRouter();
+    const router = mod.router;
+
+    router.register('/plain', { default: slowPage(hooks, 'REAL PAGE') });
+    // deliberately no registerLoading
+
+    await router.render();
+    await sleep(320);
+    assert.match(root.textContent, /REAL PAGE/);
+    hooks.endLoad();
+    hooks.endLoad();
+});
+
+test('nested loading.js overrides the root one for that subtree', async () => {
+    const { root } = mountHarness('/blog');
+    const { router: mod, hooks } = await loadRouter();
+    const router = mod.router;
+
+    router.register('/blog', { default: slowPage(hooks, 'BLOG PAGE') });
+    router.registerLoading('/', { default: () => h('p', null, 'ROOT LOADING') });
+    router.registerLoading('/blog', { default: () => h('p', null, 'BLOG LOADING') });
+
+    await router.render();
+    await sleep(340);
+
+    assert.match(root.textContent, /BLOG LOADING/,
+        `expected the deeper loading.js, got: ${JSON.stringify(root.textContent)}`);
+    assert.doesNotMatch(root.textContent, /ROOT LOADING/);
+
+    hooks.endLoad();
+    hooks.endLoad();
+    await sleep(60);
+    assert.match(root.textContent, /BLOG PAGE/);
+});

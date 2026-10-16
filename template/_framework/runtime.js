@@ -233,10 +233,10 @@ export function appendNodes(container, nodes) {
 
 // Mount a page wrapped in its layout chain.
 // `layouts` must be ordered outermost → innermost.
-export function mountPage(PageComponent, layouts, container, base) {
+export function mountPage(PageComponent, layouts, container, base, props) {
     beginRender(base || 'page');
 
-    let tree = h(PageComponent, {});
+    let tree = h(PageComponent, props || {});
     for (let i = layouts.length - 1; i >= 0; i--) {
         tree = h(layouts[i], { children: tree });
     }
