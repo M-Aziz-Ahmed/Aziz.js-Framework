@@ -25,8 +25,6 @@ The CLI walks you through a few choices:
 ```
 📁 Project name (my-aziz-js-app): my-app
 🌐 Dev server port (3000):
-   Include example pages? (Y/n):
-   Include example API routes? (Y/n):
    Include documentation? (Y/n):
 
 🎨 CSS Framework:
@@ -44,7 +42,7 @@ Every prompt has a flag, so CI and scripts can run non-interactively:
 npx create-aziz-app my-app -y                 # accept all defaults
 npx create-aziz-app shop --css tailwind       # preselect CSS
 npx create-aziz-app blog --port 4000          # change the default port
-npx create-aziz-app min --no-examples --no-api --no-docs
+npx create-aziz-app min --no-docs             # skip the docs/ folder
 npx create-aziz-app --help
 ```
 
@@ -53,8 +51,6 @@ npx create-aziz-app --help
 | `-y`, `--yes` | Accept defaults, no prompts |
 | `--port <n>` | Default dev-server port (3000) |
 | `--css <name>` | `none` \| `bootstrap` \| `tailwind` |
-| `--no-examples` | Skip the example `app/test` page |
-| `--no-api` | Empty the example `api/` routes |
 | `--no-docs` | Don't copy `docs/` |
 
 ## Install and run
@@ -77,7 +73,7 @@ Defined in your project's `package.json`:
 {
   "scripts": {
     "dev":   "node scripts/dev-server.js",
-    "build": "node scripts/dev-server.js --production",
+    "build": "node scripts/build.js",
     "start": "node scripts/dev-server.js --production",
     "test":  "node --test"
   }
@@ -85,7 +81,11 @@ Defined in your project's `package.json`:
 ```
 
 - `npm run dev` — development server with live reload and no caching.
-- `npm run build` / `npm start` — the same server in **production mode**: no live-reload socket, cache headers enabled. (Aziz.js has no bundling step; it serves your source compiled on demand and caches by file mtime.)
+- `npm run build` — boots the production server, prerenders static/ISR pages into
+  `.aziz/static`, and writes the static manifest. It is not a bundler: source is
+  still compiled on demand.
+- `npm start` — production server with no live-reload socket, cache headers, SSR,
+  static files and ISR.
 - `npm test` — runs any `**/*.test.js` files via Node's built-in test runner. With no tests present it exits 0.
 
 ## Your first page

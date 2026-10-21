@@ -40,9 +40,7 @@ function isFrameworkPath(filePath) {
     return filePath.includes('/_framework/') || filePath.includes('\\_framework\\');
 }
 
-function transformJSX(code, filename) {
-    if (!Babel) throw new Error(BABEL_MISSING_MESSAGE);
-
+function presetsFor(filename) {
     const presets = [];
     const lower = String(filename).toLowerCase();
 
@@ -57,11 +55,29 @@ function transformJSX(code, filename) {
     // cannot be set when runtime is automatic"). We compile to the
     // global `h`/`Fragment` that boot.js installs, not to jsx-runtime.
     presets.push(['react', { runtime: 'classic', pragma: 'h', pragmaFrag: 'Fragment' }]);
+    return presets;
+}
+
+function transformJSX(code, filename) {
+    if (!Babel) throw new Error(BABEL_MISSING_MESSAGE);
 
     const result = Babel.transform(code, {
         filename,
-        presets,
+        presets: presetsFor(filename),
         plugins: [],
+        sourceType: 'module',
+    });
+    return result.code;
+}
+
+// Compile an ES module to CommonJS for the server renderer / edge runtime.
+function transformCommonJS(code, filename) {
+    if (!Babel) throw new Error(BABEL_MISSING_MESSAGE);
+
+    const result = Babel.transform(code, {
+        filename,
+        presets: presetsFor(filename),
+        plugins: ['transform-modules-commonjs'],
         sourceType: 'module',
     });
     return result.code;
@@ -214,6 +230,7 @@ module.exports = {
     hasBabel,
     BABEL_MISSING_MESSAGE,
     transformJSX,
+    transformCommonJS,
     rewriteImports,
     transformModule,
     invalidate,

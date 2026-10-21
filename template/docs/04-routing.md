@@ -11,9 +11,16 @@ Aziz.js maps files under `app/` to URLs, the same way the Next.js App Router doe
 | `app/blog/page.js` | `/blog` |
 | `app/blog/[slug]/page.js` | `/blog/:slug` |
 | `app/docs/[...path]/page.js` | `/docs/*` (catch-all) |
-| `app/not-found.js` | (renders 404) |
+| `app/not-found.js` (or `app/404.js`) | (renders 404) |
+| `app/loading.js` | (loading UI for this subtree) |
+| `app/error.js` | (error boundary for this subtree) |
 
 The file must be named **`page.js`** — that's what registers a route.
+`.jsx`, `.ts` and `.tsx` are all accepted; TypeScript types are stripped at
+transform time (there is no type checking).
+
+A route is any `page.*` you create — `app/about/`, `app/blog/[slug]/` and
+the rest are examples to add yourself, not files that ship with the template.
 
 ## Dynamic segments
 
@@ -28,6 +35,9 @@ export default function Post() {
 ```
 
 Visiting `/blog/hello-world` renders `Post: hello-world`.
+
+Page components also receive `{ params, searchParams, locale }` as props during
+server rendering, so the same page can read `params.slug` without a hook.
 
 Multiple dynamic segments are fine: `app/shop/[category]/[id]/page.js` → `useParams()` gives `{ category, id }`.
 

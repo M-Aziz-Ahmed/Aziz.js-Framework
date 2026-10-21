@@ -1,6 +1,8 @@
 # ⚡ Aziz.js
 
-A lightweight Next.js clone with file-based routing, React hooks, and ES module imports — **zero dependencies, instant startup**.
+A lightweight Next.js-shaped framework with file-based routing, React hooks,
+SSR + hydration, SSG/ISR, streaming Suspense, and ES module imports — **zero
+runtime dependencies, instant startup**.
 
 ```
 Next.js:  ~400KB  +  20 dependencies  +  10s startup
@@ -18,13 +20,21 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000) — that's it.
 
+Pages are server-rendered and hydrated by default. To prerender static pages and
+run the production server:
+
+```bash
+npm run build   # writes .aziz/static
+npm start       # production SSR + static + ISR
+```
+
 ---
 
 ## Project Structure
 
 ```
 my-app/
-├── index.html          ← entry point (don't touch)
+├── index.html          ← document shell (SSR injects #root + <head>)
 │
 ├── app/                ← your pages and layouts
 │   ├── layout.js       ← root layout (wraps every page)
@@ -33,10 +43,29 @@ my-app/
 ├── styles/
 │   └── globals.css     ← global styles
 │
+├── public/             ← optional static files and images
+├── i18n.js             ← optional locale routing config
+├── .aziz/              ← generated static HTML + ISR cache
 ├── _framework/         ← runtime, hooks, router (don't touch)
-├── scripts/            ← dev server + live reload (don't touch)
+├── scripts/            ← dev server, build + live reload (don't touch)
 └── docs/               ← full documentation
 ```
+
+---
+
+## Server Rendering & Static Pages
+
+- Every page is **server-rendered** and then hydrated, so crawlers and first
+  paint get real HTML.
+- Page components receive `{ params, searchParams, locale }` as props.
+- Async server components are awaited. `<Suspense>` boundaries stream their
+  fallback, then swap in the content.
+- `metadata` / `generateMetadata()` becomes server-rendered `<head>` tags.
+- `export const revalidate = 60` opts into ISR, and
+  `generateStaticParams()` expands dynamic pages during `npm run build`.
+- `<Image>`, `<Font>`, edge API routes and i18n routing are built in.
+
+See [Server Rendering, SSG, ISR, Streaming, Images & i18n](./docs/15-server-rendering-ssg-streaming.md).
 
 ---
 
@@ -389,11 +418,30 @@ PORT=4000 npm run dev
 | ES module imports | ✅ | ✅ |
 | `@/` path alias | ✅ | ✅ |
 | Live reload | ✅ | ✅ |
-| SSR / SSG | ❌ | ✅ |
-| TypeScript | ❌ | ✅ |
+| SSR + hydration | ✅ | ✅ |
+| SSG / ISR | ✅ | ✅ |
+| Streaming Suspense | ✅ | ✅ |
+| Server-rendered metadata | ✅ | ✅ |
+| Image / font optimization | ✅ | ✅ |
+| i18n routing | ✅ | ✅ |
+| Edge API runtime | ⚠️ capability boundary | ✅ isolated |
+| React Server Components | ❌ | ✅ |
+| TypeScript | ⚠️ types stripped | ✅ type-checked |
 | Bundle size | **~50KB** | ~400KB+ |
 | Dependencies | **0** | 20+ |
 | Startup time | **< 1s** | 10–30s |
+
+---
+
+## Security model
+
+Anything a page can import is served to the browser. Server-only code must live
+in `server/` or a `*.server.js` file (or under `data/`), and API routes run
+unsandboxed Node. Edge routes are a `vm` capability boundary, not a V8 isolate.
+Add authentication, CSRF protection and rate limiting yourself.
+
+`app/api/**`, `server/`, `data/`, `scripts/`, `.aziz/`, dotfiles and
+`node_modules/` are not served as browser modules.
 
 ---
 

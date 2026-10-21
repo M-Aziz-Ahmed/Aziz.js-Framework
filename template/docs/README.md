@@ -21,6 +21,8 @@ New to Aziz.js? Start at **01**. Comfortable? Jump to the reference you need.
 | 11 | [Authentication](./11-authentication.md) | Advanced — sessions, JWT, protected routes |
 | 12 | [Production & Deployment](./12-production-and-deployment.md) | Advanced — build, ship, host |
 | 13 | [Internals](./13-internals.md) | Advanced — how the runtime actually works |
+| 14 | [Special Files, TypeScript & Middleware](./14-special-files-typescript-middleware.md) | Intermediate — `loading.js`, `error.js`, `metadata`, TypeScript, `middleware.js`, Suspense |
+| 15 | [Server Rendering, SSG, ISR, Streaming, Images & i18n](./15-server-rendering-ssg-streaming.md) | Advanced — SSR/hydration, SSG/ISR, streaming Suspense, `<Image>`/`<Font>`, edge runtime, i18n |
 
 ## TL;DR
 
@@ -54,14 +56,16 @@ Everything else is documented in these guides.
 
 ```
 my-app/
-├── index.html        ← entry point (loaded first)
-├── app/              ← pages + layouts (file-based routing)
-├── api/              ← server-side API routes (Node.js)
-├── components/       ← shared UI components
-├── lib/ models/      ← helpers + data models
-├── styles/           ← CSS
-├── _framework/       ← the runtime (h, hooks, router, api client)
-└── scripts/          ← dev server + live reload
+|-- index.html        document shell (SSR injects #root + <head>)
+|-- .aziz/            build output: static HTML + ISR cache
+|-- app/              pages + layouts (file-based routing)
+|-- api/              server-side API routes (Node.js)
+|-- components/       shared UI components
+|-- lib/ models/      helpers + data models
+|-- styles/           CSS
+|-- _framework/       the runtime (h, hooks, router, api client)
+`-- scripts/          dev server, build + live reload
 ```
 
-See [Project Structure](./02-project-structure.md) for the full breakdown.
+Only `app/layout.js` and `app/page.js` ship with the template — the other
+folders are there for you to fill in. See [Project Structure](./02-project-structure.md) for the full breakdown and [Special Files](./14-special-files-typescript-middleware.md) for `loading.js`, `error.js`, TypeScript and middleware.

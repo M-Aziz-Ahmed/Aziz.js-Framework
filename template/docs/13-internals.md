@@ -159,11 +159,12 @@ This prevents `../` from escaping the project directory. The check is done after
 
 ## What's not "done" (by design)
 
-- No real build step. On-the-fly transform + ETag/304 covers small apps.
-- No SSR/SSG, only client-side rendering of pages.
-- No CSS extraction/processing beyond serving files.
+- No bundler. JSX is transformed on demand and CSS is served as files (with
+  `@font-face` optimization).
+- Pages are server-rendered and hydrated. SSG/ISR is a separate
+  `scripts/build.js` pass into `.aziz/`; it is not a module-graph bundler.
 - No `.env` loader in the server (just `process.env`).
-- No type checking (no TS support baked in; `.jsx` extension also not required, just `.js` with JSX).
+- No type checking (types are stripped by Babel).
 
 ## Tips for debugging
 

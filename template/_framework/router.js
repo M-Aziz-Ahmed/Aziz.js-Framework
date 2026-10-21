@@ -14,7 +14,7 @@
 //        page.js        → /blog/:slug
 // ============================================================
 
-import { h, mountPage, disposeFibers, beginRender, materialize, appendNodes } from '/_framework/runtime.js';
+import { h, mountPage, hydratePage, disposeFibers, beginRender, materialize, appendNodes } from '/_framework/runtime.js';
 import { useState, useCallback, getPendingLoads, onLoadState, warmCache } from '/_framework/hooks.js';
 import { isThenable } from '/_framework/suspense.js';
 import { normalizePath, resolveRoute, collectLayouts } from '/_framework/route-match.js';
@@ -27,6 +27,39 @@ const loadings = [];
 const errors = [];
 let notFoundModule = null;
 let dev = true;
+
+// ─── i18n ────────────────────────────────────────────────────
+// The server injects the active locale in window.__AZIZ_SSR__ and the
+// project's i18n config in routes.json. Links and navigate() use it to
+// keep the locale prefix on every internal navigation.
+
+let i18nConfig = { locales: [], defaultLocale: null, localePrefix: 'always' };
+const LOCALE_SEGMENT_RE = /^\/([a-z]{2}(?:-[a-zA-Z]{2,})?)(?:\/|$)/;
+
+function getLocaleFromPath(pathname) {
+    const m = LOCALE_SEGMENT_RE.exec(normalizePath(pathname));
+    if (!m) return null;
+    if (i18nConfig.locales.length && !i18nConfig.locales.includes(m[1])) return null;
+    return m[1];
+}
+
+export function useLocale() {
+    if (typeof window !== 'undefined' && window.__AZIZ_SSR__ && window.__AZIZ_SSR__.locale) {
+        return window.__AZIZ_SSR__.locale;
+    }
+    return getLocaleFromPath(window.location.pathname) || i18nConfig.defaultLocale || '';
+}
+
+function localizeHref(href) {
+    if (!href || !href.startsWith('/')) return href;
+    if (!i18nConfig.locales || i18nConfig.locales.length === 0) return href;
+    if (LOCALE_SEGMENT_RE.test(href) && getLocaleFromPath(href)) return href;
+    if (href.startsWith('/api/') || href.startsWith('/_') || /\.[a-z0-9]+$/i.test(href)) return href;
+    const locale = useLocale();
+    if (!locale) return href;
+    if (i18nConfig.localePrefix === 'as-needed' && locale === i18nConfig.defaultLocale) return href;
+    return '/' + locale + (href === '/' ? '' : href);
+}
 
 // How long a route transition may stay pending before loading.js appears.
 // Below this the route is "fast enough" and showing a spinner would only flash.
@@ -53,8 +86,9 @@ function matchesSegment(pattern, pathname) {
 // ─── Navigation ──────────────────────────────────────────────
 
 export function navigate(path, { replace = false, scroll = true } = {}) {
-    if (replace) history.replaceState(null, '', path);
-    else history.pushState(null, '', path);
+    const target = localizeHref(path);
+    if (replace) history.replaceState(null, '', target);
+    else history.pushState(null, '', target);
     router.render();
     if (scroll) window.scrollTo(0, 0);
 }
@@ -87,7 +121,7 @@ export function notFound() {
 const prefetched = new Set();
 
 function prefetchFor(pathname) {
-    const normalized = normalizePath(pathname);
+    const normalized = normalizePath(localizeHref(pathname));
     const match = resolveRoute(routes, normalized);
     if (!match) return Promise.resolve();
     const declared = match.value && match.value.prefetch;
@@ -107,13 +141,58 @@ export function prefetch(path) {
     try { return prefetchFor(path); } catch { return Promise.resolve(); }
 }
 
+// Automatic prefetching: every internal link is observed and its declared
+// data is warmed as soon as the link approaches the viewport. There is no
+// reason to make users opt in to a free head start.
+let autoPrefetchInstalled = false;
+
+function installAutoPrefetch() {
+    if (autoPrefetchInstalled) return;
+    autoPrefetchInstalled = true;
+
+    const warmLink = (anchor) => {
+        if (!anchor || !anchor.getAttribute) return;
+        if (anchor.getAttribute('data-prefetch') === 'false') return;
+        const href = anchor.getAttribute('href');
+        if (!href || !href.startsWith('/') || href.startsWith('/api/') || href.startsWith('/_')) return;
+        prefetchFor(href);
+    };
+
+    const selector = 'a[data-aziz-link], a[data-prefetch]';
+    const observe = (root) => {
+        if (!root || typeof root.querySelectorAll !== 'function') return;
+        const links = root.querySelectorAll(selector);
+        if (typeof IntersectionObserver === 'function') {
+            const io = new IntersectionObserver((entries) => {
+                for (const entry of entries) {
+                    if (!entry.isIntersecting) continue;
+                    warmLink(entry.target);
+                    io.unobserve(entry.target);
+                }
+            }, { rootMargin: '200px' });
+            links.forEach(link => io.observe(link));
+        } else {
+            const idle = typeof requestIdleCallback === 'function'
+                ? requestIdleCallback
+                : (fn) => setTimeout(fn, 200);
+            links.forEach(link => idle(() => warmLink(link)));
+        }
+    };
+
+    observe(document);
+    window.__azizObserveLinks = observe;
+}
+
 // <Link href="/about">About</Link>
-export function Link({ href, children, className, style, onClick, replace = false, scroll = true, prefetch: shouldPrefetch = false, ...rest }) {
-    const warm = () => { if (shouldPrefetch && href) prefetchFor(href); };
+export function Link({ href, children, className, style, onClick, replace = false, scroll = true, prefetch: shouldPrefetch = true, ...rest }) {
+    const finalHref = localizeHref(href);
+    const warm = () => { if (shouldPrefetch && finalHref) prefetchFor(finalHref); };
 
     return h('a', {
         ...rest,
-        href,
+        href: finalHref,
+        'data-aziz-link': '',
+        'data-prefetch': shouldPrefetch ? 'true' : 'false',
         class: className,
         style,
         onMouseEnter: warm,
@@ -126,7 +205,7 @@ export function Link({ href, children, className, style, onClick, replace = fals
             if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
             if (!href || /^([a-z]+:)?\/\//i.test(href) || href.startsWith('#') || href.startsWith('mailto:')) return;
             e.preventDefault();
-            navigate(href, { replace, scroll });
+            navigate(finalHref, { replace, scroll });
         },
     }, ...(Array.isArray(children) ? children : [children]));
 }
@@ -136,6 +215,7 @@ export function Link({ href, children, className, style, onClick, replace = fals
 export function useRouter() {
     return {
         pathname: normalizePath(window.location.pathname),
+        locale: useLocale(),
         push: (path, options) => navigate(path, options),
         replace: (path, options) => navigate(path, { ...options, replace: true }),
         back,
@@ -280,6 +360,7 @@ export const router = {
     layouts,
     currentParams: {},
     _lastPathname: null,
+    _hydrated: false,
     // Transition bookkeeping for loading.js. _epoch invalidates stale timers
     // so a fast navigation can never be replaced by a slow one's spinner.
     _epoch: 0,
@@ -315,6 +396,7 @@ export const router = {
         window.usePathname = usePathname;
         window.useNavigation = useNavigation;
         window.useTransition = useTransition;
+        window.useLocale = useLocale;
         window.Link = Link;
         window.redirect = redirect;
         window.notFound = notFound;
@@ -329,6 +411,7 @@ export const router = {
         window.addEventListener('popstate', () => this.render());
 
         await this.render();
+        installAutoPrefetch();
     },
 
     async loadRoutes() {
@@ -338,7 +421,9 @@ export const router = {
             const data = await res.json();
             manifest = Array.isArray(data) ? data : data.routes || [];
             dev = Array.isArray(data) ? true : data.dev !== false;
+            if (!Array.isArray(data) && data.i18n) i18nConfig = data.i18n;
             window.__azizDev = dev;
+            window.__azizI18n = i18nConfig;
         } catch (err) {
             console.error('❌ Failed to load route manifest:', err);
             return;
@@ -476,9 +561,32 @@ _finishTransition(epoch) {
 
         applyMetadata(mergeMetadata(...layoutModules, pageModule));
 
+        // First client pass: hydrate the server markup instead of throwing it
+        // away. If a component suspends, the catch below keeps the SSR HTML
+        // on screen until the data lands.
+        const ssr = window.__AZIZ_SSR__;
+        const canHydrate = !forceLoading &&
+            ssr && !this._hydrated &&
+            normalizePath(ssr.pathname || '/') === pathname &&
+            root.getAttribute && root.getAttribute('data-aziz-ssr') === '1';
+
         try {
-            mountPage(PageComponent, layoutComponents, root, 'page:' + pathname);
-            if (forceLoading) this._finishTransition(this._epoch);
+            if (canHydrate) {
+                try {
+                    hydratePage(PageComponent, layoutComponents, root, 'page:' + pathname);
+                    this._hydrated = true;
+                    if (forceLoading) this._finishTransition(this._epoch);
+                } catch (hydrateErr) {
+                    if (isThenable(hydrateErr)) throw hydrateErr;
+                    console.warn('⚠️ Hydration mismatch — falling back to a client render.', hydrateErr);
+                    mountPage(PageComponent, layoutComponents, root, 'page:' + pathname);
+                    this._hydrated = true;
+                    if (forceLoading) this._finishTransition(this._epoch);
+                }
+            } else {
+                mountPage(PageComponent, layoutComponents, root, 'page:' + pathname);
+                if (forceLoading) this._finishTransition(this._epoch);
+            }
         } catch (err) {
             // A component suspended via use(resource). Show the nearest
             // loading.js and re-render once the thrown promise settles.
@@ -533,6 +641,8 @@ _finishTransition(epoch) {
 
         if (isNewRoute) window.scrollTo(0, 0);
         else if (scrollY) window.scrollTo(0, scrollY);
+
+        if (typeof window.__azizObserveLinks === 'function') window.__azizObserveLinks(root);
 
         this._beginTransition(pathname, collectNearest(loadings, pathname), pendingAtStart);
     },

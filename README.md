@@ -1,6 +1,6 @@
 # ⚡ Aziz.js
 
-**A Next.js-shaped framework with zero runtime dependencies.** File-based routing, TypeScript, global hooks, server-side API routes and middleware — served as ~20 KB gzipped of ES modules, no bundler.
+**A Next.js-shaped framework with zero runtime dependencies.** File-based routing, TypeScript, global hooks, SSR + hydration, SSG/ISR, streaming Suspense, server-side API routes and middleware — served as ~20 KB gzipped of ES modules, no bundler.
 
 ```bash
 npx create-aziz-app my-app
@@ -63,31 +63,34 @@ Measured at v3.2.0, Node 24.16, Windows. Next.js figures come from the npm regis
 
 ### Where Aziz.js matches Next.js
 
-File-based routing · nested & dynamic (`[slug]`) and catch-all (`[...path]`) routes · layouts with segment inheritance · `loading.js` · `error.js` · `not-found.js` · data suspension (`createResource`/`use`) · `metadata` with Open Graph · `middleware.js` · API routes with `NextResponse.json()` · global hooks · `@/` alias · WebSocket live reload · TypeScript · route prefetching.
+SSR + hydration · file-based routing · nested & dynamic (`[slug]`) and catch-all (`[...path]`) routes · layouts with segment inheritance · `loading.js` streaming · `error.js` · `not-found.js` · SSG/ISR (`revalidate`, `generateStaticParams`) · `<Suspense>` boundaries · data suspension (`createResource`/`use`) · server-rendered `metadata` with Open Graph · `middleware.js` · API routes with `NextResponse.json()` · edge API routes · `<Image>` / `<Font>` · i18n routing · global hooks · `@/` alias · WebSocket live reload · TypeScript · automatic route prefetching.
 
-### Where it does not
+### Where it differs
 
 | Capability | Status |
 | --- | --- |
-| Server-side rendering | ❌ **CSR only** — HTML ships an empty `<div id="root">` |
-| Static generation / ISR | ❌ |
-| React Server Components | ❌ |
-| Streaming | ❌ |
-| `<Suspense>` / partial in-place swap | ⚠️ **page-level only** — `createResource` suspends the whole page; no concurrent rendering |
-| Route prefetching | ⚠️ **data-only** — you declare what to warm; no automatic RSC prefetch |
-| Image optimization | ❌ |
-| Font optimization | ❌ |
-| Metadata | ⚠️ applies at runtime, so no-JS crawlers don't see it |
-| Edge runtime | ❌ |
-| i18n routing | ❌ |
-| Ecosystem & docs | ❌ small |
-| Battle-tested at scale | ❌ one maintainer, no CVE process |
+| Server-side rendering | ✅ SSR by default + hydration |
+| Static generation / ISR | ✅ `npm run build`, `revalidate` |
+| React Server Components | ⚠️ not React RSC; async server components + server-only modules |
+| Streaming | ✅ route-level (`loading.js`) and `<Suspense>` boundaries |
+| `<Suspense>` / partial in-place swap | ✅ component boundaries stream and swap; not a concurrent renderer |
+| Route prefetching | ✅ automatic viewport prefetch + declared data warm-up |
+| Image optimization | ✅ `<Image>` + `/_aziz/image` (resizing needs optional `sharp`) |
+| Font optimization | ✅ `<Font>`, `font-display:swap`, automatic preloads |
+| Metadata | ✅ server-rendered `<head>` |
+| Edge runtime | ⚠️ API routes with `runtime = 'edge'` (capability boundary, not an isolate) |
+| i18n routing | ✅ locale prefixes, `[locale]` routes, cookie/`Accept-Language` |
+| Ecosystem & docs | ⚠️ intentionally small |
+| Battle-tested at scale | ❌ one maintainer; security policy is now published |
 
 ## When *not* to use it
 
-Pick Next.js if you need **SEO or fast first paint**, server rendering, streaming, image/font optimization, or a hiring pool that knows your stack. These are not small gaps — they are architectural, and closing them would mean writing a bundler and a server render path.
+Pick Next.js if you need **React Server Components**, a mature plugin
+ecosystem, battle-tested scale, or a hiring pool that knows your stack.
 
-Aziz.js is genuinely good for **learning the conventions, prototypes, demos, internal tools, dashboards, and anywhere 20 KB and a 161 ms dev loop matter more than SSR.**
+Aziz.js is genuinely good for **learning the conventions, prototypes, demos,
+internal tools, content sites and small production apps** — anywhere SSR,
+streaming and a 20 KB client matter alongside a 161 ms dev loop.
 
 ---
 
@@ -194,7 +197,11 @@ const products = use(fetchResource('/api/products'));
 const heavy = createResource(() => import('/_modules/big-chart.js'));
 ```
 
-> **Scope:** this is **page-level** suspension, not React's concurrent renderer. A suspended page is replaced wholesale by `loading.js` and rendered again when the data lands. There is no streaming and no partial in-place swap — partial updates require explicit state.
+For component-level suspension use `<Suspense fallback={…}>` (global). On the
+server the fallback is sent immediately and the boundary is streamed in place;
+in the browser the boundary re-renders itself when the promise settles. Route-level
+`loading.js` streaming is also supported. This is not React's concurrent
+renderer, but it is real streaming and partial swap.
 
 ## Hooks
 
@@ -261,7 +268,9 @@ export const metadata = {
 
 Exported from any layout or page. Page metadata wins over layout metadata and **deep-merges**, so a page can override one `openGraph` field without restating the rest.
 
-⚠️ Applied to `<head>` at runtime. Crawlers that don't execute JavaScript will not see it — that's the no-SSR limitation.
+Rendered into the server response, so crawlers that don't execute JavaScript
+see the title, description, Open Graph and Twitter tags. Client-side navigation
+updates the same tags in place.
 
 ## Middleware
 
@@ -324,7 +333,9 @@ Server code goes in `server/` or `*.server.mjs`. See [Security model](#security-
 
 ## Prefetching
 
-Page modules are already loaded, so the useful thing to warm is **data**. Declare it:
+Links in the viewport are prefetched automatically with an
+`IntersectionObserver`. Set `data-prefetch="false"` on a link to opt out. You
+can also warm **data** for a route:
 
 ```tsx
 // app/products/page.tsx
@@ -340,7 +351,8 @@ export default function Page() {
 <Link href="/products" prefetch>Products</Link>   // warms on hover/focus/touch
 ```
 
-This is data prefetching, not Next.js RSC prefetching. There is no automatic prefetch — you declare the URLs.
+`router.prefetch('/products')` warms a route programmatically. Data prefetching
+is separate from the automatic link prefetch, so you can opt into both.
 
 ---
 
@@ -350,8 +362,10 @@ This is data prefetching, not Next.js RSC prefetching. There is no automatic pre
 
 ```text
 my-app/
-├── index.html
+├── index.html                  ← document shell (SSR injects #root + <head>)
 ├── middleware.js               ← optional auth/redirect hook
+├── i18n.js                     ← optional locale routing config
+├── .aziz/                      ← build output: static HTML + ISR cache
 ├── app/
 │   ├── layout.tsx              ← root layout
 │   ├── page.tsx                ← /
@@ -365,11 +379,17 @@ my-app/
 ├── components/ lib/ models/    ← client-importable
 ├── server/                     ← NEVER served (server-only modules)
 ├── styles/globals.css
-├── _framework/                 ← the runtime (9 files, ~1,970 lines)
-└── scripts/dev-server.js
+├── _framework/                 ← the runtime (including components.js)
+└── scripts/
+    ├── dev-server.js
+    └── build.js                ← SSG/ISR prerender pass
 ```
 
-Scripts: `npm run dev` · `npm run build` · `npm start`. Port via `PORT=4000 npm run dev`. `build` is **not** a bundler — it is the same server with production caching and live reload off.
+Scripts: `npm run dev` · `npm run build` · `npm start`. Port via
+`PORT=4000 npm run dev`. `build` is **not** a bundler — it boots the production
+server, prerenders static pages into `.aziz/`, and leaves dynamic pages to SSR.
+
+Deep dive: [Server Rendering, SSG, ISR, Streaming, Images & i18n](./template/docs/15-server-rendering-ssg-streaming.md).
 
 ## Security model
 
@@ -386,6 +406,7 @@ There is **no bundler**, so any module a page can import is served from disk. Th
 | `node_modules/` | reachable only via `/_modules/<pkg>` |
 | `server/` `data/` | server-only modules, flat-file persistence |
 | `*.server.{js,mjs,jsx,ts}` | individually marked server-only |
+| `.aziz/` | build output and ISR cache |
 | `scripts/` except `live-reload-client.js` | the dev server itself |
 
 **Served:** `app/` (except `app/api/**`), `components/`, `models/`, `lib/`, `styles/`, `_framework/`, `index.html`.
@@ -408,16 +429,18 @@ There is **no bundler**, so any module a page can import is served from disk. Th
 
 ## Limitations
 
-1. **No SSR.** The HTML contains `<div id="root"></div>`. Bad for SEO and slow first paint.
-2. **No SSG, ISR, RSC or streaming.** Data suspension (createResource/use) replaces loading.js page-wide, but there is no streaming or in-place partial swap.
-3. **No type checking.** Types are stripped, not verified.
-4. **No bundler.** No minification, tree-shaking or code splitting.
-5. **No image or font optimization.**
-6. **Metadata is runtime-only** — invisible to non-JS crawlers.
-7. **Prefetch is opt-in and data-only.**
-8. **No edge runtime, no built-in i18n.**
-9. **One maintainer**, no security-response process.
-10. **Not battle-tested.** Validate before real traffic.
+1. **Not React RSC.** Async server components and `server/` modules exist, but
+   there is no React Server Component protocol or client-reference graph.
+2. **No type checking.** Types are stripped, not verified.
+3. **No bundler.** No minification, tree-shaking or code splitting.
+4. **Image resizing needs `sharp`.** Without it, `/_aziz/image` caches and
+   serves the original bytes.
+5. **Edge runtime is a `vm` capability boundary**, not a V8 isolate.
+6. **ISR is single-instance.** `.aziz/cache/isr` is local to the server.
+7. **Streaming boundaries are DOM swaps** and do not preserve listeners inside
+   the swapped subtree.
+8. **One maintainer.** A security policy exists (`SECURITY.md`), but the project
+   is not battle-tested. Validate before real traffic.
 
 ## Troubleshooting
 
@@ -440,4 +463,4 @@ Node's Windows directory watcher can abort the process at startup with `Assertio
 
 ---
 
-**Author:** Syed Muhammad Aziz Ahmed · **License:** MIT
+**Author:** Syed Muhammad Aziz Ahmed · **License:** MIT · **Security:** [SECURITY.md](./SECURITY.md)

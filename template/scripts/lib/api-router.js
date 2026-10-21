@@ -9,6 +9,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const edgeRuntime = require('./edge-runtime');
 const { pathToFileURL } = require('url');
 
 const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'];
@@ -207,14 +208,16 @@ async function loadApiRoutes(ROOT, { verbose = true } = {}) {
 
     for (const { pattern, file } of files) {
         try {
-            const mod = await loadRouteModule(file);
+            const source = fs.readFileSync(file, 'utf8');
+            const edge = edgeRuntime.isEdgeSource(source);
+            const mod = edge ? edgeRuntime.loadEdgeRoute(file) : await loadRouteModule(file);
             const { methods, legacy } = normalizeHandlers(mod);
             if (Object.keys(methods).length === 0 && !legacy) {
                 errors.push(`${file}: no HTTP method exports (expected GET, POST, …)`);
                 continue;
             }
             const score = patternScore(pattern);
-            routes.push({ pattern, file, methods, legacy, ...score });
+            routes.push({ pattern, file, methods, legacy, edge, ...score });
         } catch (err) {
             errors.push(`${file}: ${err.message}`);
         }
@@ -227,7 +230,7 @@ async function loadApiRoutes(ROOT, { verbose = true } = {}) {
         for (const r of routes) {
             const names = Object.keys(r.methods);
             const label = names.length ? `[${names.join(', ')}]` : '[legacy handler]';
-            console.log(`   ✅ ${r.pattern} ${label}`);
+            console.log(`   ✅ ${r.pattern} ${label}${r.edge ? ' ⚡ edge' : ''}`);
         }
         for (const e of errors) console.log(`   ❌ ${e}`);
         console.log('');
@@ -476,6 +479,24 @@ async function handleApiRequest(req, res, { routes, port }) {
                 error: `Method ${req.method} not allowed`,
                 allowed: Object.keys(route.methods),
             }));
+            return;
+        }
+
+        if (route.edge) {
+            if (!methodFn) {
+                return sendJson(res, 405, {
+                    error: 'Edge routes must export named HTTP methods (GET, POST, …)',
+                });
+            }
+            const edgeUrl = new URL(req.url, `http://localhost:${port || 3000}`).href;
+            const response = await edgeRuntime.invokeEdgeHandler(methodFn, {
+                method: req.method,
+                url: edgeUrl,
+                headers: req.headers,
+                body: rawBody,
+                params,
+            });
+            await edgeRuntime.sendEdgeResponse(response, res, { headOnly });
             return;
         }
 

@@ -105,7 +105,9 @@ Layouts do **not** re-mount when you navigate between sibling routes (their stat
 
 ## The 404 page
 
-`app/not-found.js` renders when no route matches (or a page exports nothing usable):
+`app/not-found.js` (or `app/404.js`) renders when no route matches, when a
+page exports nothing usable, or when a page calls `notFound()`. It is not
+shipped with the template — create it:
 
 ```js
 // app/not-found.js

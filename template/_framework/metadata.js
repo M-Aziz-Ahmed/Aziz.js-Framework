@@ -90,15 +90,50 @@ function upsertCanonical(href) {
     link.setAttribute('href', href);
 }
 
+function mergeTitle(base, extra) {
+    if (extra === undefined) return base;
+    if (typeof extra === 'string') {
+        if (base && typeof base === 'object' && base.template) {
+            return { default: extra, template: base.template };
+        }
+        return extra;
+    }
+    if (extra && typeof extra === 'object') {
+        const merged = {
+            ...(base && typeof base === 'object' ? base : {}),
+            ...extra,
+        };
+        if (!merged.template && base && typeof base === 'object' && base.template) {
+            merged.template = base.template;
+        }
+        return merged;
+    }
+    return extra;
+}
+
 export function mergeMetadata(...modules) {
-    return modules.reduce((acc, mod) => deepMerge(acc, (mod && mod.metadata) || {}), {});
+    let acc = {};
+    for (const mod of modules) {
+        const block = (mod && mod.metadata) || {};
+        const rest = { ...block };
+        delete rest.title;
+        acc = deepMerge(acc, rest);
+        if (Object.prototype.hasOwnProperty.call(block, 'title')) {
+            acc.title = mergeTitle(acc.title, block.title);
+        }
+    }
+    return acc;
 }
 
 export function applyMetadata(metadata) {
     if (!metadata || typeof metadata !== 'object') return;
     const merged = metadata;
 
-    const title = metaTitle(merged.title);
+    let title = metaTitle(merged.title);
+    if (merged.title && typeof merged.title === 'object' && merged.title.template &&
+        !merged.title.absolute && title) {
+        title = merged.title.template.replace('%s', title);
+    }
     if (title) document.title = title;
 
     for (const [tag, path] of Object.entries(NAME_TAGS)) {

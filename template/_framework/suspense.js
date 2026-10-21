@@ -96,8 +96,22 @@ export function use(resource) {
     return resource;
 }
 
+// Read a response the server already resolved during SSR. This keeps
+// hydration from refetching everything on first paint.
+export function seededResponse(url, options = {}) {
+    if (typeof window === 'undefined' || !window.__AZIZ_DATA__) return null;
+    const method = (options.method || 'GET').toUpperCase();
+    if (method !== 'GET') return null;
+    const store = window.__AZIZ_DATA__.data || window.__AZIZ_DATA__;
+    const entry = store && store['GET:' + url];
+    if (!entry || entry.error) return null;
+    return { data: entry.data, status: entry.status };
+}
+
 // Convenience: fetch JSON and wrap it as a resource.
 export function fetchResource(url, options) {
+    const seeded = seededResponse(url, options);
+    if (seeded) return createResource(seeded.data);
     return createResource(async () => {
         const res = await fetch(url, options);
         if (!res.ok) {

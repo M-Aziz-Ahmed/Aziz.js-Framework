@@ -294,20 +294,37 @@ function cacheKey(url, options) {
 //   const products = createResource(fetch('/api/products').then(r => r.json()));
 //   export default function Page() { return <List items={use(products)} />; }
 
-import { createResource, fetchResource, use } from './suspense.js';
+import { createResource, fetchResource, use, seededResponse } from './suspense.js';
 
-export { createResource, fetchResource, use };
+export { createResource, fetchResource, use, seededResponse };
 
 // ─── useFetch ────────────────────────────────────────────────
 
 export function useFetch(url, options = {}) {
-    const [state, setState] = useState({ data: null, loading: !!url, error: null, status: null });
+    const seeded = seededResponse(url, options || {});
+    const [state, setState] = useState(
+        seeded
+            ? { data: seeded.data, loading: false, error: null, status: seeded.status }
+            : { data: null, loading: !!url, error: null, status: null }
+    );
     const abortRef = useRef(null);
     const [nonce, setNonce] = useState(0);
 
     useEffect(() => {
         if (!url) {
             setState({ data: null, loading: false, error: null, status: null });
+            return;
+        }
+
+        // SSR already resolved this URL — don't refetch on hydration.
+        const seededHit = seededResponse(url, options);
+        if (seededHit && !options.force) {
+            responseCache.set(cacheKey(url, options), {
+                data: seededHit.data,
+                status: seededHit.status,
+                at: Date.now(),
+            });
+            setState({ data: seededHit.data, loading: false, error: null, status: seededHit.status });
             return;
         }
 

@@ -17,3 +17,4 @@ pnpm-lock.yaml
 # Never publish node_modules (including nested ones in template)
 node_modules/
 template/node_modules/
+template/.aziz/

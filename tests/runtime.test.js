@@ -54,6 +54,56 @@ test('useState persists state across re-renders', () => {
     assert.equal(container.childNodes[0].childNodes[0].textContent, '2');
 });
 
+test('hydratePage() keeps server DOM and attaches event listeners', () => {
+    const { h } = runtime;
+    const { useState } = hooks;
+
+    const container = document.createElement('div');
+    const div = document.createElement('div');
+    const span = document.createElement('span');
+    span.appendChild(document.createTextNode('server text'));
+    const button = document.createElement('button');
+    button.appendChild(document.createTextNode('+'));
+    div.appendChild(span);
+    div.appendChild(button);
+    container.appendChild(div);
+
+    function Counter() {
+        const [count, setCount] = useState(0);
+        return h('div', null,
+            h('span', null, 'hydrated ' + count),
+            h('button', { onClick: () => setCount(c => c + 1) }, '+')
+        );
+    }
+
+    const render = () => runtime.hydratePage(Counter, [], container, 'page:/hydrate-ok');
+    globalThis.window.__rerenderPage = render;
+    render();
+    assert.equal(container.childNodes[0], div, 'the server element is reused');
+    assert.equal(span.textContent, 'hydrated 0', 'text is patched in place');
+    button.dispatch('click');
+    assert.equal(span.textContent, 'hydrated 1', 'hydration attached the listener');
+});
+
+test('hydratePage() replaces mismatched server nodes instead of duplicating them', () => {
+    const { h } = runtime;
+    const container = document.createElement('div');
+    const stale = document.createElement('p');
+    stale.appendChild(document.createTextNode('old'));
+    container.appendChild(stale);
+
+    runtime.hydratePage(
+        () => h('section', null, h('strong', null, 'new')),
+        [],
+        container,
+        'page:/hydrate-mismatch'
+    );
+
+    assert.equal(container.childNodes.length, 1);
+    assert.equal(container.childNodes[0].tagName, 'section');
+    assert.equal(container.textContent, 'new');
+});
+
 test('BUGFIX: sibling components keep their own hook state (keyed list)', () => {
     const { h } = runtime;
     const { useState } = hooks;

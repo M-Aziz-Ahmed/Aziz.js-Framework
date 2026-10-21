@@ -2,6 +2,7 @@
 # The test suite resolves @babel/standalone from the root install; see
 # devDependencies in package.json.
 node_modules/
+.aziz/
 
 # Packed build artifacts. npm publish generates these from `files`
 # (["bin", "template"]); committing them only serves to go stale.

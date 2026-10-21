@@ -8,7 +8,7 @@ Aziz.js doesn't "bundle" to a huge build — it serves your source, compiles JSX
 {
   "scripts": {
     "dev":   "node scripts/dev-server.js",
-    "build": "node scripts/dev-server.js --production",
+    "build": "node scripts/build.js",
     "start": "node scripts/dev-server.js --production"
   }
 }
@@ -16,6 +16,10 @@ Aziz.js doesn't "bundle" to a huge build — it serves your source, compiles JSX
 
 **Running with `--production` (or `NODE_ENV=production`) changes behavior:**
 
+- **Prerendered HTML** from `.aziz/static` is served first; ISR entries from
+  `.aziz/cache/isr` are served stale-while-revalidate.
+- **Streaming** stays on unless `AZIZ_STREAMING=0` (the build sets this for
+  prerendering).
 - **No WebSocket live reload** server/client — the client script becomes an empty no-op.
 - **Cache headers**: HTML/JSON are `no-cache` (check ETag), most static assets get long-lived cache with `ETag` still checked.
 - **No verbose "Browser connected" / watcher spam** in the logs.
@@ -24,8 +28,8 @@ Aziz.js doesn't "bundle" to a huge build — it serves your source, compiles JSX
 ## Locally testing production
 
 ```bash
-npm run build  # or npm start
-# Server runs at http://localhost:3000 with production headers
+npm run build  # prerender static pages into .aziz/static
+npm start      # serve at http://localhost:3000 with production headers
 ```
 
 Visiting `/_framework/routes.json` returns `"dev": false` in production.
@@ -77,14 +81,14 @@ example.com {
 
 ## Static hosting?
 
-You **cannot** just drop `template/` into a static S3 bucket. API routes (`api/**` and `app/api/**/route.js`) run on the **Node server**. The browser needs the dev server to:
+You **cannot** drop the whole project into a static bucket, because pages still
+run through the Node server for hydration data, `api/**` and `app/api/**`
+routes. But you can deploy the prerendered documents from `.aziz/static/` to a
+CDN for fully static pages (no API routes, no dynamic params) while proxying
+`/api/*` and `/_framework/*` to the Node server.
 
-- serve transformed JS (JSX → h())
-- serve the route manifest
-- resolve bare imports via `/_modules/*`
-- handle `/api/*`
-
-If you want a 100% static site, you'd need a separate SSR/bundler — that's not what this lightweight framework does.
+A fully static export is not a separate mode: `npm run build` produces real HTML
+in `.aziz/static`, and `npm start` serves it with the runtime behind it.
 
 ## Security notes
 
@@ -98,9 +102,11 @@ If you want a 100% static site, you'd need a separate SSR/bundler — that's not
 
 - No code splitting / tree shaking
 - No minification of JS/CSS (though you can pre-minify and reference extra files)
-- No image optimization
-- No prerendering/SSG
 - No `.env` auto-loading (you must set environment variables)
+
+**Production mode does do:** SSR, SSG/ISR (`npm run build` + `revalidate`),
+streaming Suspense, server-rendered metadata, image resizing when `sharp` is
+installed, font preloads, edge API routes and i18n routing.
 
 This is by design for simplicity and speed. For most small–medium apps it's perfectly usable.
 

@@ -76,7 +76,7 @@ Examples:
 // Files/folders never copied into a new project.
 function shouldSkip(relPath) {
     if (relPath === 'node_modules' || relPath.startsWith('node_modules' + path.sep)) return true;
-    if (relPath === '.DS_Store' || relPath.endsWith('.log')) return true;
+    if (relPath === '.aziz' || relPath === '.git' || relPath === '.npmignore' || relPath === '.DS_Store' || relPath.endsWith('.log')) return true;
     return false;
 }
 
@@ -259,6 +259,7 @@ async function main() {
     // 3. .gitignore
     fs.writeFileSync(path.join(targetDir, '.gitignore'), [
         'node_modules/',
+        '.aziz/',
         '.DS_Store',
         '*.log',
         '',

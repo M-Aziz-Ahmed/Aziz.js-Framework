@@ -4,65 +4,58 @@ Every folder in a generated Aziz.js app, and what goes in it.
 
 ```
 my-app/
-├── index.html              ← entry point (loaded first, then the router takes over)
-├── package.json            ← name, scripts, dependencies
-│
-├── app/                    ← PAGES + LAYOUTS (file-based routing)
-│   ├── layout.js           ← root layout, wraps every page
-│   ├── page.js             ← route: /
-│   ├── not-found.js        ← custom 404 screen
-│   ├── about/
-│   │   └── page.js         ← route: /about
-│   └── blog/
-│       └── [slug]/
-│           └── page.js     ← route: /blog/:slug  (dynamic)
-│
-├── api/                    ← SERVER-SIDE API ROUTES (Node.js)
-│   ├── hello.js            ← /api/hello
-│   └── users.js            ← /api/users
-│
-├── components/             ← shared UI components
-│   ├── Navbar.js
-│   └── Footer.js
-│
-├── lib/                    ← utilities, DB connections, helpers
-│   └── db.js
-├── models/                 ← data models / schema definitions
-│   └── User.js
-├── styles/                 ← CSS
-│   └── globals.css
-│
-├── _framework/             ← the framework itself (don't edit casually)
-│   ├── runtime.js          ← h(), fibers, DOM materialization
-│   ├── hooks.js            ← useState, useEffect, …
-│   ├── router.js           ← client router, Link, navigation
-│   ├── route-match.js      ← path matching / layout collection
-│   ├── api.js              ← browser API client (api.get, …)
-│   ├── next-response.js    ← NextResponse for API routes
-│   └── boot.js             ← boot sequence, exposes globals
-│
-├── scripts/                ← dev server + tooling
-│   ├── dev-server.js       ← the HTTP server (dev + production)
-│   ├── live-reload-client.js
-│   └── lib/                ← js-transform, module-resolver, api-router
-│
-└── docs/                   ← these guides (optional, --no-docs to skip)
+|-- index.html              document shell (SSR injects #root + <head>)
+|-- package.json            name, scripts, dependencies
+|-- i18n.js                 optional locale routing config
+|-- middleware.js           optional auth/redirect hook
+|-- .aziz/                  build output (gitignored): static HTML + ISR cache
+|--
+|-- app/                    PAGES + LAYOUTS (file-based routing)
+|   |-- layout.js           root layout, wraps every page
+|   |-- page.js             route: /
+|
+|-- styles/                 CSS
+|   |-- globals.css
+|
+|-- _framework/             the framework itself (do not edit casually)
+|   |-- runtime.js          h(), fibers, DOM materialization, hydration
+|   |-- hooks.js            useState, useEffect, ...
+|   |-- router.js           client router, Link, i18n, auto-prefetch
+|   |-- route-match.js      path matching / layout collection
+|   |-- metadata.js         metadata + Open Graph head tags
+|   |-- suspense.js         createResource / use
+|   |-- components.js       Suspense, Image, Font, Script
+|   |-- api.js              browser API client (api.get, ...)
+|   |-- next-response.js    NextResponse for API routes
+|   |-- boot.js             SSR data seeding, globals, stream replacement
+|
+|-- scripts/                dev server + tooling
+|   |-- dev-server.js       the HTTP server (dev + production, SSR/ISR)
+|   |-- build.js            SSG/ISR build pipeline
+|   |-- live-reload-client.js
+|   `-- lib/                server renderer, module loader, page router,
+|                           api-router, i18n, image/font optimizers
+|
+`-- docs/                   these guides (optional, --no-docs to skip)
 ```
 
 ## The two "worlds"
 
 Aziz.js runs code in two places. Confusing them is the #1 beginner mistake.
 
-| | **Browser** (`app/`, `components/`) | **Server** (`api/`, `lib/`, `models/`) |
+| | **Browser** (`app/`, `components/`) | **Server** (`api/`, `server/`) |
 |--|-------------------------------------|-----------------------------------------|
-| Runs in | the browser | Node.js |
+| Runs in | the browser (after hydration) | Node.js |
 | Module system | ES modules (`import` / `export`) | CommonJS (`require`) or `.mjs` ESM |
 | Imports | `/…`, `@/…`, bare npm → `/_modules/…` | normal Node resolution |
-| Framework | `h`, hooks, router, `api` client | `NextResponse`, `require('../_framework/…')` |
+| Framework | `h`, hooks, router, `api` client | same hooks + `NextResponse`, server renderer |
 | Can touch | DOM, `window` | filesystem, DB, env vars, secrets |
 
-- **Pages and components** are compiled (JSX → `h()` calls) and sent to the browser.
-- **API routes** are loaded by the dev server in Node and executed per request.
+- **Pages and components** run on the server for the first HTML response, then
+  the same code hydrates in the browser.
+- **API routes** are loaded by the server in Node and executed per request.
+- **Server-only modules** live in `server/`, `data/`, or `*.server.js` and are
+  never sent to the browser.
 
 ### Why API files use `require`
 
@@ -90,11 +83,12 @@ Both styles are supported — see [API Routes](./06-api-routes.md).
 `scripts/dev-server.js`:
 
 1. Builds a **route manifest** by scanning `app/` and serves it at `/_framework/routes.json`.
-2. Transforms **JSX** to `h()` calls on demand (cached by file mtime).
-3. Resolves **bare npm imports** (`import mongoose from 'mongoose'`) via `/_modules/mongoose`.
-4. Dispatches **API requests** to `api/**` and `app/api/**/route.js`.
-5. Serves static files, with **path-traversal confined to the project root** (403 otherwise).
-6. In development, opens a **WebSocket** and pushes reload events when you save.
+2. Server-renders pages with layouts, metadata, streaming Suspense and hydration data.
+3. Transforms **JSX** to `h()` calls on demand (cached by file mtime).
+4. Resolves **bare npm imports** (`import mongoose from 'mongoose'`) via `/_modules/mongoose`.
+5. Dispatches **API requests** to `api/**` and `app/api/**/route.js` (Node or edge runtime).
+6. Serves static files, optimizes images/fonts and enforces the **server-only boundary**.
+7. In development, opens a **WebSocket** and pushes reload events when you save.
 
 ## Conventions worth keeping
 

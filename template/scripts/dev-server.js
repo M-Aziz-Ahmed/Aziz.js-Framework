@@ -17,6 +17,13 @@ const crypto = require('crypto');
 const { hasBabel, transformModule, invalidate: invalidateTransform } = require('./lib/js-transform');
 const { resolveNodeModule } = require('./lib/module-resolver');
 const apiRouter = require('./lib/api-router');
+const { buildRouteManifest, buildServerRoutes } = require('./lib/route-manifest');
+const pageRouter = require('./lib/page-router');
+const { ServerModuleLoader } = require('./lib/module-loader');
+const renderer = require('./lib/renderer');
+const staticStore = require('./lib/static-store');
+const imageOptimizer = require('./lib/image-optimizer');
+const fontOptimizer = require('./lib/font-optimizer');
 
 const PORT = parseInt(process.env.PORT, 10) || 3000;
 const ROOT = process.cwd();
@@ -115,67 +122,31 @@ if (!hasBabel()) {
     ]));
 }
 
+if (!imageOptimizer.hasSharp()) {
+    console.log('🖼️  sharp is not installed — <Image> still caches and lazy-loads, but will not resize.');
+    console.log('    Optional: npm install sharp\n');
+}
+
 console.log(`🚀 Aziz.js dev server starting${PRODUCTION ? ' (production mode)' : ''}...\n`);
 
 // ─── Route Manifest ──────────────────────────────────────────
 // Scans app/ and builds the page/layout/not-found/loading/error list for the
 // client router.
 
-// Every page-route file extension the scanner recognises. TypeScript (.ts/.tsx)
-// is supported as of 3.1.3 — before that these were silently ignored and the
-// route just 404'd, which was the worst failure mode in the framework.
-const PAGE_EXT = ['.js', '.jsx', '.ts', '.tsx'];
+// ─── Page routes / SSR state ─────────────────────────────────
 
-function buildRouteManifest() {
-    const manifest = [];
-    const appDir = path.join(ROOT, 'app');
-    if (!fs.existsSync(appDir)) return manifest;
+let pageLoader = new ServerModuleLoader(ROOT);
+let serverRoutes = { pages: {}, layouts: [], i18n: null, notFoundFile: null };
+const isrInFlight = new Map();
 
-    const filePathFor = (routeBase, fileName) =>
-        '/app' + (routeBase === '/' ? '' : routeBase) + '/' + fileName;
-
-    // Match "<name>.js|.jsx|.ts|.tsx" for a given base name.
-    const matchFile = (base, name) => {
-        const dot = name.lastIndexOf('.');
-        if (dot === -1) return false;
-        return name.slice(0, dot) === base && PAGE_EXT.includes(name.slice(dot).toLowerCase());
-    };
-
-    function scan(dir, routeBase) {
-        const entries = fs.readdirSync(dir, { withFileTypes: true });
-
-        for (const entry of entries) {
-            const fullPath = path.join(dir, entry.name);
-
-            if (entry.isDirectory()) {
-                // Keep [slug] as-is — the router matcher expects bracket syntax
-                const segment = entry.name;
-                scan(fullPath, routeBase === '/' ? '/' + segment : routeBase + '/' + segment);
-                continue;
-            }
-
-            const name = entry.name;
-
-            if (matchFile('page', name)) {
-                manifest.push({ type: 'page', pathname: routeBase || '/', filePath: filePathFor(routeBase, name) });
-            } else if (matchFile('layout', name)) {
-                manifest.push({ type: 'layout', pathname: routeBase || '/', filePath: filePathFor(routeBase, name) });
-            } else if (matchFile('loading', name)) {
-                manifest.push({ type: 'loading', pathname: routeBase || '/', filePath: filePathFor(routeBase, name) });
-            } else if (matchFile('error', name)) {
-                manifest.push({ type: 'error', pathname: routeBase || '/', filePath: filePathFor(routeBase, name) });
-            } else if (matchFile('not-found', name) || matchFile('404', name)) {
-                if (routeBase === '/') {
-                    // filePath must use the real name — the old code hardcoded .js
-                    manifest.push({ type: 'not-found', pathname: '/not-found', filePath: filePathFor(routeBase, name) });
-                }
-            }
-            // route.* files are API routes — handled by api-router, not the page router
-        }
+async function reloadPageRoutes(verbose = true) {
+    serverRoutes = buildServerRoutes(ROOT);
+    pageLoader.clear();
+    if (verbose) {
+        const count = Object.keys(serverRoutes.pages).length;
+        console.log(`📄 ${count} page route(s)${serverRoutes.i18n ? ` · i18n: ${serverRoutes.i18n.locales.join(', ')}` : ''}`);
     }
-
-    scan(appDir, '/');
-    return manifest;
+    return serverRoutes;
 }
 
 // ─── API routes ──────────────────────────────────────────────
@@ -292,6 +263,299 @@ function sendMiddlewareResponse(res, result, method) {
     res.end(method === 'HEAD' ? undefined : result.body ?? '');
 }
 
+// ─── Page rendering (SSR / SSG / ISR / streaming) ────────────
+
+function looksLikeBrowserModule(urlPath) {
+    let decoded;
+    try { decoded = decodeURIComponent(urlPath); } catch { return false; }
+    const base = path.join(ROOT, decoded);
+    const root = path.resolve(ROOT);
+    if (!path.resolve(base).startsWith(root + path.sep) && path.resolve(base) !== root) return false;
+    if (fs.existsSync(base) && fs.statSync(base).isFile()) return true;
+    for (const ext of ['.js', '.jsx', '.ts', '.tsx', '.mjs']) {
+        if (fs.existsSync(base + ext)) return true;
+        if (fs.existsSync(path.join(base, 'index' + ext))) return true;
+    }
+    return false;
+}
+
+function getCookie(header, name) {
+    if (!header) return null;
+    for (const part of String(header).split(';')) {
+        const i = part.indexOf('=');
+        if (i === -1) continue;
+        if (part.slice(0, i).trim() === name) return decodeURIComponent(part.slice(i + 1).trim());
+    }
+    return null;
+}
+
+function pageCacheHeaders(dynamic, revalidate) {
+    if (!PRODUCTION) return NO_CACHE;
+    if (dynamic === 'force-dynamic') return { 'Cache-Control': 'no-store' };
+    if (revalidate) {
+        return { 'Cache-Control': `public, max-age=0, s-maxage=${revalidate}, stale-while-revalidate=${revalidate}` };
+    }
+    return { 'Cache-Control': 'public, max-age=0, must-revalidate' };
+}
+
+function sendHtml(req, res, html, status = 200, extraHeaders = {}) {
+    res.writeHead(status, {
+        'Content-Type': 'text/html; charset=utf-8',
+        'X-Aziz-Render': 'server',
+        ...extraHeaders,
+    });
+    res.end(req.method === 'HEAD' ? undefined : html);
+}
+
+function notFoundInfo(pathname) {
+    const layouts = pageRouter.collectLayouts(serverRoutes.layouts, pathname).map(l => l.file);
+    return {
+        pageFile: serverRoutes.notFoundFile || null,
+        layoutFiles: layouts,
+        loadingFile: null,
+        errorFile: null,
+        notFoundFile: serverRoutes.notFoundFile || null,
+    };
+}
+
+function resolvePage(primaryPathname, fallbackPathname) {
+    let match = pageRouter.resolveRoute(serverRoutes.pages, primaryPathname);
+    if (!match && fallbackPathname && fallbackPathname !== primaryPathname) {
+        match = pageRouter.resolveRoute(serverRoutes.pages, fallbackPathname);
+    }
+    return {
+        match,
+        info: match ? match.value : notFoundInfo(primaryPathname),
+        params: match ? match.params : {},
+        found: !!match,
+    };
+}
+
+async function renderDocument({ req, info, pathname, params, locale, indexHtml, seedData }) {
+    const origin = `http://127.0.0.1:${server.address()?.port || PORT}`;
+    const indexText = indexHtml || fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+    return renderer.renderPage({
+        loader: pageLoader,
+        pageFile: info.pageFile,
+        layoutFiles: info.layoutFiles || [],
+        loadingFile: info.loadingFile || null,
+        errorFile: info.errorFile || null,
+        notFoundFile: info.notFoundFile || null,
+        pathname,
+        params,
+        searchParams: new URL(req.url, origin).searchParams,
+        locale,
+        i18n: serverRoutes.i18n,
+        origin,
+        requestHeaders: req.headers,
+        streaming: process.env.AZIZ_STREAMING !== '0',
+        data: seedData || {},
+        indexHtml: indexText,
+        headLinks: fontOptimizer.collectFontPreloads(ROOT),
+    });
+}
+
+function safeScriptJSON(value) {
+    return JSON.stringify(value).replace(/</g, '\\u003c');
+}
+
+function streamReplacementScript(html) {
+    return `<script>(function(){var html=${safeScriptJSON(String(html))};` +
+        `if(window.__azizStreamReplace){window.__azizStreamReplace(html);}` +
+        `else{(window.__azizStreamQueue=window.__azizStreamQueue||[]).push(html);}})();</script>`;
+}
+
+function streamDataScript(serialized) {
+    return `<script>(function(){window.__AZIZ_SSR__=window.__AZIZ_SSR__||{};` +
+        `window.__AZIZ_SSR__.data=${safeScriptJSON(serialized.data || {})};` +
+        `window.__AZIZ_SSR__.serialized=${safeScriptJSON(serialized)};})();</script>`;
+}
+
+async function servePage(req, res, url, rawPath) {
+    const requestPath = pageRouter.normalizePath(rawPath);
+    let pathname = requestPath;
+    let locale = null;
+    const i18n = serverRoutes.i18n;
+
+    if (i18n) {
+        const redirectTo = pageRouter.localeRedirect(
+            pathname,
+            i18n,
+            req.headers['accept-language'],
+            getCookie(req.headers.cookie, i18n.cookie)
+        );
+        if (redirectTo && req.method !== 'HEAD') {
+            res.writeHead(307, { Location: redirectTo, Vary: 'Accept-Language, Cookie', ...NO_CACHE });
+            res.end();
+            return;
+        }
+        const detected = pageRouter.detectLocale(pathname, i18n);
+        pathname = detected.pathname;
+        locale = detected.locale;
+    }
+
+    // Pre-rendered documents win in production, including ISR entries.
+    if (PRODUCTION) {
+        const staticEntry = staticStore.readStatic(ROOT, requestPath);
+        const info = resolvePage(requestPath, pathname);
+        const mod = info.info.pageFile ? safeLoadPage(info.info.pageFile) : null;
+        const revalidate = mod && Number(mod.revalidate);
+
+        // A regenerated ISR entry is newer than the build-time document.
+        const isrEntry = staticStore.readISR(ROOT, requestPath);
+        if (isrEntry && (!staticEntry || isrEntry.at > (staticEntry.meta.generatedAt || 0))) {
+            sendHtml(req, res, isrEntry.html, isrEntry.status || 200, {
+                ...pageCacheHeaders('auto', isrEntry.revalidate),
+                'X-Aziz-Render': 'isr',
+            });
+            if (isrEntry.revalidate && Date.now() - isrEntry.at > isrEntry.revalidate * 1000) {
+                regenerateISR(req, requestPath, pathname, info, locale, isrEntry.revalidate);
+            }
+            return;
+        }
+
+        if (staticEntry) {
+            sendHtml(req, res, staticEntry.html, staticEntry.meta.status || 200, {
+                ...pageCacheHeaders(mod && mod.dynamic, revalidate),
+                'X-Aziz-Render': 'static',
+            });
+            if (revalidate && Date.now() - (staticEntry.meta.generatedAt || 0) > revalidate * 1000) {
+                regenerateISR(req, requestPath, pathname, info, locale, revalidate);
+            }
+            return;
+        }
+
+        if (isrEntry) {
+            sendHtml(req, res, isrEntry.html, isrEntry.status || 200, {
+                ...pageCacheHeaders('auto', isrEntry.revalidate),
+                'X-Aziz-Render': 'isr',
+            });
+            if (isrEntry.revalidate && Date.now() - isrEntry.at > isrEntry.revalidate * 1000) {
+                regenerateISR(req, requestPath, pathname, info, locale, isrEntry.revalidate);
+            }
+            return;
+        }
+    }
+
+    const resolved = resolvePage(requestPath, pathname);
+    const status = resolved.found ? 200 : 404;
+
+    let result;
+    try {
+        result = await renderDocument({
+            req,
+            info: resolved.info,
+            pathname: requestPath,
+            params: resolved.params,
+            locale,
+            indexHtml: null,
+        });
+    } catch (err) {
+        console.error('❌ SSR error:', err);
+        sendHtml(req, res, `<!doctype html><html><body><h1>500 — Server render failed</h1><pre>${renderer.escapeHtml(err.message)}</pre></body></html>`, 500, NO_CACHE);
+        return;
+    }
+
+    if (result && result.redirect) {
+        res.writeHead(result.status || 307, { Location: result.redirect, ...NO_CACHE });
+        res.end();
+        return;
+    }
+
+    const finalStatus = result.status && result.status !== 200 ? result.status : status;
+    const docResult = { ...result, status: finalStatus };
+    const lang = locale || 'en';
+
+    if (result.done) {
+        const shellDoc = renderer.buildPageHTML(
+            fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8'),
+            docResult,
+            { lang }
+        );
+        res.writeHead(finalStatus, {
+            'Content-Type': 'text/html; charset=utf-8',
+            ...pageCacheHeaders('auto', null),
+            'X-Aziz-Render': 'stream',
+            'X-Accel-Buffering': 'no',
+        });
+        if (req.method === 'HEAD') { res.end(); return; }
+        res.write(shellDoc);
+
+        try {
+            const final = await result.done;
+            if (result.mode === 'shell') {
+                res.write(streamReplacementScript(final.html || ''));
+            }
+            if (final.serialized) res.write(streamDataScript(final.serialized));
+            for (const chunk of final.chunks || []) res.write(chunk);
+        } catch (err) {
+            res.write(streamReplacementScript(`<h1>500 — ${renderer.escapeHtml(err.message)}</h1>`));
+        }
+        res.end();
+        return;
+    }
+
+    const doc = renderer.buildPageHTML(
+        fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8'),
+        docResult,
+        { lang }
+    );
+
+    // ISR: pages that opt in are cached after the first render.
+    const pageMod = resolved.info.pageFile ? safeLoadPage(resolved.info.pageFile) : null;
+    const revalidate = pageMod && Number(pageMod.revalidate);
+    if (PRODUCTION && resolved.found && revalidate > 0) {
+        staticStore.writeISR(ROOT, requestPath, {
+            html: doc,
+            status: finalStatus,
+            revalidate,
+        });
+    }
+
+    sendHtml(req, res, doc, finalStatus, pageCacheHeaders(pageMod && pageMod.dynamic, revalidate));
+}
+
+function safeLoadPage(file) {
+    try { return pageLoader.load(file); } catch (err) {
+        console.warn(`⚠️  Failed to load ${path.relative(ROOT, file)}: ${err.message}`);
+        return null;
+    }
+}
+
+function regenerateISR(req, storePath, pathname, info, locale, revalidate) {
+    if (isrInFlight.has(storePath)) return isrInFlight.get(storePath);
+    const job = (async () => {
+        try {
+            const result = await renderDocument({
+                req,
+                info: info.info,
+                pathname: storePath,
+                params: info.params,
+                locale,
+                indexHtml: null,
+            });
+            if (result && result.redirect) return;
+            const final = result.done ? await result.done : result;
+            const doc = renderer.buildPageHTML(
+                fs.readFileSync(path.join(ROOT, 'index.html'), 'utf8'),
+                { ...result, ...final, done: undefined, shell: undefined },
+                { lang: locale || 'en' }
+            );
+            staticStore.writeISR(ROOT, storePath, {
+                html: doc,
+                status: final.status || 200,
+                revalidate,
+            });
+        } catch (err) {
+            console.warn(`⚠️  ISR regeneration failed for ${storePath}: ${err.message}`);
+        } finally {
+            isrInFlight.delete(storePath);
+        }
+    })();
+    isrInFlight.set(storePath, job);
+    return job;
+}
+
 // ─── HTTP Server ─────────────────────────────────────────────
 
 const MIME = {
@@ -404,9 +668,55 @@ const server = http.createServer(async (req, res) => {
 
     // ── Route manifest (used by the client router to discover pages)
     if (urlWithoutQuery === '/_framework/routes.json') {
-        const manifest = buildRouteManifest();
+        const manifest = buildRouteManifest(ROOT);
         res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', ...NO_CACHE });
-        res.end(JSON.stringify({ dev: !PRODUCTION, routes: manifest }));
+        res.end(JSON.stringify({
+            dev: !PRODUCTION,
+            routes: manifest,
+            i18n: serverRoutes.i18n,
+        }));
+        return;
+    }
+
+    // ── Image optimization
+    if (urlWithoutQuery === '/_aziz/image' || urlWithoutQuery === '/__aziz/image') {
+        const url = new URL(rawUrl, `http://${req.headers.host || 'localhost'}`);
+        await imageOptimizer.handleImageRequest(req, res, url, ROOT);
+        return;
+    }
+
+    // ── Server metadata for client-side navigations
+    if (urlWithoutQuery === '/__aziz/meta') {
+        try {
+            const url = new URL(rawUrl, `http://${req.headers.host || 'localhost'}`);
+            const requestPath = pageRouter.normalizePath(url.searchParams.get('path') || '/');
+            let pathname = requestPath;
+            let locale = null;
+            if (serverRoutes.i18n) {
+                const detected = pageRouter.detectLocale(pathname, serverRoutes.i18n);
+                pathname = detected.pathname;
+                locale = detected.locale;
+            }
+            const resolved = resolvePage(requestPath, pathname);
+            const modules = [
+                ...(resolved.info.layoutFiles || []).map(f => pageLoader.load(f)),
+                resolved.info.pageFile ? pageLoader.load(resolved.info.pageFile) : null,
+            ];
+            const runtime = require('./lib/server-runtime');
+            const ctx = runtime.createRenderContext({
+                pathname: requestPath,
+                params: resolved.params,
+                searchParams: url.searchParams,
+                locale,
+                i18n: serverRoutes.i18n,
+            });
+            const metadata = await renderer.collectMetadata(modules, ctx);
+            res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', ...NO_CACHE });
+            res.end(JSON.stringify({ metadata, pathname, locale }));
+        } catch (err) {
+            res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8', ...NO_CACHE });
+            res.end(JSON.stringify({ error: err.message }));
+        }
         return;
     }
 
@@ -465,6 +775,26 @@ const server = http.createServer(async (req, res) => {
             detail: `'${urlWithoutQuery}' is not served by Aziz.js (${blocked}).`,
             hint: 'Server-only code belongs in api/, server/, or a *.server.mjs file — import it from an API route, never from a page.',
         }));
+        return;
+    }
+
+    // ── Pages: SSR / SSG / ISR / streaming
+    //
+    // A request with no file extension is a page unless a module with that
+    // path is importable from the browser (then it is an extensionless
+    // `import Foo from '@/components/Foo'` request).
+    if ((req.method === 'GET' || req.method === 'HEAD') &&
+        !path.extname(urlWithoutQuery) &&
+        !urlWithoutQuery.startsWith('/_framework/') &&
+        !urlWithoutQuery.startsWith('/_modules/') &&
+        !urlWithoutQuery.startsWith('/scripts/') &&
+        !looksLikeBrowserModule(urlWithoutQuery)) {
+        try {
+            await servePage(req, res, new URL(rawUrl, `http://${req.headers.host || 'localhost'}`), urlWithoutQuery);
+        } catch (err) {
+            console.error('❌ Page render failed:', err);
+            sendHtml(req, res, `<!doctype html><html><body><h1>500 — Page render failed</h1><pre>${renderer.escapeHtml(err.message)}</pre></body></html>`, 500, NO_CACHE);
+        }
         return;
     }
 
@@ -543,6 +873,9 @@ const server = http.createServer(async (req, res) => {
         if (['.js', '.jsx', '.mjs', '.ts', '.tsx'].includes(fileExt)) {
             const code = transformModule(content.toString(), filePath, stat.mtimeMs);
             content = Buffer.from(code);
+        } else if (fileExt === '.css') {
+            // Font optimization: ensure font-display:swap is present.
+            content = Buffer.from(fontOptimizer.optimizeCSS(content.toString()));
         }
 
         res.writeHead(200, headers);
@@ -617,6 +950,7 @@ if (!PRODUCTION) {
         if (!fs.existsSync(full)) return;
         console.log(`   - ${dir}/`);
 
+
         try {
             fs.watch(full, { recursive: true }, (_, filename) => {
                 if (!filename) return;
@@ -625,8 +959,19 @@ if (!PRODUCTION) {
 
                 console.log(`\n📝 Changed: ${dir}/${filename}`);
 
-                // Keep the transform cache fresh
-                invalidateTransform(path.join(full, filename));
+                // Keep both the transform and server module caches fresh
+                const changed = path.join(full, filename);
+                invalidateTransform(changed);
+                pageLoader.invalidate(changed);
+
+                if (dir === 'app') {
+                    clearTimeout(reloadTimer);
+                    reloadTimer = setTimeout(() => {
+                        reloadPageRoutes(false);
+                        notifyClients();
+                    }, 200);
+                    return;
+                }
 
                 if (SERVER_CODE_DIRS.has(dir)) {
                     // API routes may import from lib/ and models/ — reload them
@@ -644,6 +989,23 @@ if (!PRODUCTION) {
             console.warn(`   ⚠️ Could not watch ${dir}/: ${err.message}`);
         }
     });
+
+    for (const name of ['i18n.js', 'i18n.cjs', 'i18n.mjs', 'i18n.json']) {
+        const file = path.join(ROOT, name);
+        if (!fs.existsSync(file)) continue;
+        console.log(`   - ${name}`);
+        try {
+            fs.watch(file, () => {
+                console.log(`\n📝 Changed: ${name}`);
+                clearTimeout(reloadTimer);
+                reloadTimer = setTimeout(() => {
+                    reloadPageRoutes(false).then(notifyClients);
+                }, 200);
+            });
+        } catch (err) {
+            console.warn(`   ⚠️ Could not watch ${name}: ${err.message}`);
+        }
+    }
 }
 
 // ─── Start ────────────────────────────────────────────────────
@@ -663,7 +1025,8 @@ function startServer(port) {
     });
 }
 
-reloadApiRoutes()
+reloadPageRoutes()
+    .then(() => reloadApiRoutes())
     .then(async () => {
         middlewareFn = await loadMiddleware();
         if (middlewareFn) {
@@ -672,6 +1035,6 @@ reloadApiRoutes()
     })
     .then(() => startServer(PORT))
     .catch(err => {
-        console.error('❌ Failed to load API routes:', err);
+        console.error('❌ Failed to load routes:', err);
         startServer(PORT);
     });
