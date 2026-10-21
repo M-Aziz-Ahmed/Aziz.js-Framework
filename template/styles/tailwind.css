@@ -45,7 +45,7 @@
     }
 
     .btn:hover {
-        @apply opacity-85;
+        @apply opacity-80;
     }
 
     .btn-primary {
@@ -95,28 +95,5 @@
 
     .not-found h1 {
         @apply text-8xl text-primary;
-    }
-}
-
-/* Custom Utilities */
-@layer utilities {
-    .text-primary {
-        color: #61dafb;
-    }
-
-    .bg-primary {
-        background-color: #61dafb;
-    }
-
-    .text-dark {
-        color: #282c34;
-    }
-
-    .bg-dark {
-        background-color: #282c34;
-    }
-
-    .border-primary {
-        border-color: #61dafb;
     }
 }

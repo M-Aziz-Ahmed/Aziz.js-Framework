@@ -1,5 +1,36 @@
 # Changelog
 
+## [3.3.0]
+
+### Added
+- **Precompiled production build.** `npm run build` now compiles every module **once, at build time** into `.aziz/compiled` instead of compiling JSX on every server start. The build produces two artifacts per file: a browser ESM module (JSX/TypeScript stripped, local imports rewritten to content-hashed URLs) and a CommonJS module for the server renderer. The production server loads those artifacts directly, so **Babel is never evaluated in production** — `GET /_aziz/health` reports `"babel": "not loaded"`. If `.aziz/compiled` is missing the server falls back to on-the-fly compilation and says so.
+- **Content-hashed asset URLs.** The browser imports `/_compiled/app/page.<hash>.js`, served with `Cache-Control: public, max-age=31536000, immutable`. The hash comes from the source, so a URL only changes when the code does. Compiled assets are served from a build-time allow-list, so a crafted path cannot escape the compiled directory.
+- **Dependency preflight.** The build inspects every bare import: a **missing package fails the build**, a **CommonJS-only package warns** (it cannot run in a browser — `require is not defined`). The no-bundler failure mode is now caught before deploy instead of after.
+- **Response compression.** Brotli and gzip for text responses (HTML, JS, CSS, JSON, SVG) when the client sends `Accept-Encoding`. No dependency, no configuration.
+- **Health endpoint.** `GET /_aziz/health` returns status, uptime, pid, memory, whether a precompiled build is loaded, and whether Babel was loaded.
+- **Graceful shutdown.** `SIGTERM`/`SIGINT` stop the listener, finish in-flight requests and exit 0 — a rolling deploy no longer cuts responses in half.
+- **Security headers** in production: `X-Content-Type-Options: nosniff`, `X-Frame-Options: SAMEORIGIN`, `Referrer-Policy: strict-origin-when-cross-origin`.
+- **Request timeouts** (`requestTimeout` 30 s, `headersTimeout` 35 s, `keepAliveTimeout` 5 s) to blunt slowloris.
+- **Tailwind is compiled locally** — the CDN is gone. `tailwindcss` is a dev dependency, `styles/tailwind.output.css` is built by `npm run dev`, `npm run build` and `npm run css:build`, and the dev server rebuilds it when watched files change.
+- **`sharp` ships as an optional dependency**, so a normal `npm install` gives you image resizing by default.
+
+### Fixed
+- **The production server walked the whole project on every request.** `collectFontPreloads()` re-scanned `styles/` and `app/` and re-read every CSS file, and `loadManifest()` re-parsed the whole prerender manifest, for *every* request. On a 300-page app the median response was **43 ms**; it is now **1–2 ms**. The preload list and the manifest are cached (mtime-keyed) and invalidated on change.
+- **`@babel/standalone` was loaded eagerly** at import time, costing ~64 MB of RSS in every process even when nothing needed compiling. It is now loaded lazily on the first actual transform.
+- **`staticStore.clear()` deleted the whole `.aziz/` directory**, which would have removed build output. It now clears only the prerendered pages and the ISR cache.
+- **The route manifest leaked absolute server paths** to the browser (`file: "C:\\...\\app\\page.js"`). Only `pathname`, `filePath` and `type` are sent now.
+- **The metadata client selector was malformed** (`name="description"]`), throwing `SyntaxError: Failed to execute 'querySelector'` on every page load. It is now `meta[name="description"]`.
+- The test scaffold linked `@babel`'s parent directory instead of the package, so scaffolded apps could not compile JSX — the tests only passed because the parent process supplied Babel.
+
+### Numbers (300-page app, 302 modules)
+
+| | before | after |
+| --- | --- | --- |
+| first request after a deploy | 194 ms | 52 ms |
+| median request | 43 ms | 1–2 ms |
+| resident memory per worker | 80 MB | 62 MB |
+| Babel loaded in production | yes | never |
+
 ## [3.2.0]
 
 ### Added

@@ -11,9 +11,10 @@
 //  does not have to thread `loading`/`error` through every component — the
 //  nearest loading.js is the fallback.
 //
-//  Scope: this is page-level suspension, not React's concurrent renderer.
-//  There is no streaming and no partial in-place swap — the whole page is
-//  replaced by loading.js and rendered again when its data arrives.
+//  Scope: this is not React's concurrent renderer. On the server, a
+//  suspended page streams loading.js first; on the client, a suspended page
+//  is replaced by loading.js and rendered again when its data arrives.
+//  Component-level <Suspense> boundaries are handled by components.js.
 // ============================================================
 
 function isThenable(value) {

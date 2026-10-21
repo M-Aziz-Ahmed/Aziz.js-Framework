@@ -8,22 +8,53 @@
 const path = require('path');
 const fs = require('fs');
 
-// ─── Babel loading (with fallback resolution for monorepos/tests) ───
+// ─── Babel loading (lazy) ─────────────────────────────────────
+//
+// Babel is ~3 MB of parser and ~64 MB of resident memory once
+// evaluated. A production server that loads precompiled modules
+// never needs it, so it is resolved on first use instead of at
+// import time. require.resolve() (no evaluation) is used to answer
+// "is it installed?" without paying that cost.
+
 let Babel = null;
-try {
-    Babel = require('@babel/standalone');
-} catch (e) {
-    const fallbacks = [
+let babelTried = false;
+
+function babelCandidates() {
+    return [
         path.join(__dirname, '..', '..', 'node_modules', '@babel', 'standalone'),
         path.join(process.cwd(), 'node_modules', '@babel', 'standalone'),
     ];
-    for (const fb of fallbacks) {
-        try { Babel = require(fb); break; } catch { /* keep looking */ }
-    }
 }
 
+function loadBabel() {
+    if (Babel || babelTried) return Babel;
+    babelTried = true;
+    try {
+        Babel = require('@babel/standalone');
+    } catch (e) {
+        for (const fb of babelCandidates()) {
+            try { Babel = require(fb); break; } catch { /* keep looking */ }
+        }
+    }
+    return Babel;
+}
+
+// True when Babel can be used (loads it).
 function hasBabel() {
-    return !!Babel;
+    return !!loadBabel();
+}
+
+// True when Babel is installed — without evaluating it.
+function hasBabelAvailable() {
+    if (Babel) return true;
+    try {
+        require.resolve('@babel/standalone');
+        return true;
+    } catch {
+        return babelCandidates().some(dir => {
+            try { require.resolve(dir); return true; } catch { return false; }
+        });
+    }
 }
 
 // Thrown whenever a module needs compiling but Babel is unavailable.
@@ -59,9 +90,10 @@ function presetsFor(filename) {
 }
 
 function transformJSX(code, filename) {
-    if (!Babel) throw new Error(BABEL_MISSING_MESSAGE);
+    const babel = loadBabel();
+    if (!babel) throw new Error(BABEL_MISSING_MESSAGE);
 
-    const result = Babel.transform(code, {
+    const result = babel.transform(code, {
         filename,
         presets: presetsFor(filename),
         plugins: [],
@@ -72,9 +104,10 @@ function transformJSX(code, filename) {
 
 // Compile an ES module to CommonJS for the server renderer / edge runtime.
 function transformCommonJS(code, filename) {
-    if (!Babel) throw new Error(BABEL_MISSING_MESSAGE);
+    const babel = loadBabel();
+    if (!babel) throw new Error(BABEL_MISSING_MESSAGE);
 
-    const result = Babel.transform(code, {
+    const result = babel.transform(code, {
         filename,
         presets: presetsFor(filename),
         plugins: ['transform-modules-commonjs'],
@@ -158,29 +191,33 @@ function mapSpecifier(spec) {
     return '/_modules/' + spec;
 }
 
-function rewriteImports(code) {
+// `mapper` lets the build step point local imports at content-hashed
+// artifacts instead of their source paths. Returning null/undefined from
+// the mapper leaves the specifier untouched.
+function rewriteImports(code, mapper) {
     const isCode = codePositions(code);
+    const map = typeof mapper === 'function' ? mapper : mapSpecifier;
 
     // from 'specifier'  (covers `import ... from`, `export ... from`)
     code = code.replace(/(\bfrom\s*)(['"])([^'"\n]+)\2/g, (m, from, q, spec, offset) => {
         if (!isCode[offset]) return m;
-        const mapped = mapSpecifier(spec);
-        return mapped === spec ? m : `${from}${q}${mapped}${q}`;
+        const mapped = map(spec);
+        return !mapped || mapped === spec ? m : `${from}${q}${mapped}${q}`;
     });
 
     // side-effect imports: import 'specifier';
     // (requires the quote right after `import`, so `import(` is not matched)
     code = code.replace(/(\bimport\s+)(['"])([^'"\n]+)\2/g, (m, kw, q, spec, offset) => {
         if (!isCode[offset]) return m;
-        const mapped = mapSpecifier(spec);
-        return mapped === spec ? m : `${kw}${q}${mapped}${q}`;
+        const mapped = map(spec);
+        return !mapped || mapped === spec ? m : `${kw}${q}${mapped}${q}`;
     });
 
     // dynamic imports: import('specifier')
     code = code.replace(/(\bimport\s*\(\s*)(['"])([^'"\n]+)\2(\s*\))/g, (m, pre, q, spec, post, offset) => {
         if (!isCode[offset]) return m;
-        const mapped = mapSpecifier(spec);
-        return mapped === spec ? m : `${pre}${q}${mapped}${q}${post}`;
+        const mapped = map(spec);
+        return !mapped || mapped === spec ? m : `${pre}${q}${mapped}${q}${post}`;
     });
 
     return code;
@@ -228,10 +265,14 @@ function cacheSize() {
 
 module.exports = {
     hasBabel,
+    hasBabelAvailable,
+    loadBabel,
     BABEL_MISSING_MESSAGE,
     transformJSX,
     transformCommonJS,
     rewriteImports,
+    mapSpecifier,
+    isRelativeOrAbsolute,
     transformModule,
     invalidate,
     clearCache,

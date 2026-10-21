@@ -202,8 +202,9 @@ The endpoint:
 - resolves files under `public/` or the project root;
 - refuses `server/`, `data/`, dotfiles, `node_modules/` and path traversal;
 - serves an immutable, ETag-based cache in `.aziz/cache/images`;
-- converts to WebP/AVIF and resizes **when `sharp` is installed**
-  (`npm install sharp`), otherwise serves the original bytes cache-busted.
+- converts to WebP/AVIF and resizes when `sharp` is available. Sharp is an
+  optional dependency, so a normal `npm install` installs it by default; if the
+  platform cannot install it, the endpoint still serves the original bytes.
 
 Remote URLs are redirected, not proxied.
 

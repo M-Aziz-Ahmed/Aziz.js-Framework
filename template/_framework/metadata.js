@@ -4,9 +4,8 @@
 //
 //  Merges outermost-first so a page overrides its layout, with a deep merge
 //  for openGraph/twitter so a page can override one field without restating
-//  the rest. Everything is applied to <head> at runtime, which means it is
-//  only visible to consumers that execute JavaScript — see the README's
-//  "no SSR" limitation.
+//  the rest. The server renderer emits the same tags into <head>; this module
+//  updates them in place during client-side navigation.
 // ============================================================
 
 const MANAGED = 'data-aziz-meta';
@@ -68,7 +67,7 @@ function upsert(attr, key, content) {
     if (content === undefined || content === null || content === '') return;
     const value = Array.isArray(content) ? content.join(', ') : String(content);
 
-    let tag = document.head.querySelector(`${attr}="${key}"]`);
+    let tag = document.head.querySelector(`meta[${attr}="${key}"]`);
     if (!tag) {
         tag = document.createElement('meta');
         tag.setAttribute(attr, key);

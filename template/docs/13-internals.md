@@ -136,6 +136,40 @@ The dev server reads that file and runs `transformModule` (JSX transform skipped
 
 Invalidated on file change by the watcher.
 
+Babel itself is loaded **lazily**: `require('@babel/standalone')` happens on the
+first actual transform, not at import time. A production server running
+precompiled modules therefore never evaluates the compiler at all — check
+`GET /_aziz/health` and look at `"babel": "not loaded"`.
+
+## Precompiled build output
+
+`npm run build` runs `scripts/lib/precompile.js` before prerendering:
+
+1. **Collect** — every `.js/.jsx/.ts/.tsx/.mjs` file under `app/`,
+   `components/`, `lib/`, `models/`, minus server-only files (`app/api/**`,
+   `*.server.*`).
+2. **Hash** — `sha256(source).slice(0, 10)`. The hash is derived from the
+   *source*, not the output, so the URL is stable and only changes when the
+   code changes.
+3. **Compile (browser)** — JSX/TypeScript → ESM, then `rewriteImports` with a
+   custom mapper: local imports become `/_compiled/<rel>.<hash>.js`, bare
+   imports stay `/_modules/<pkg>`.
+4. **Compile (server)** — the same source → CommonJS, written to
+   `.aziz/compiled/server/<rel>.cjs`. The server renderer evaluates these in
+   its `vm` sandbox without Babel.
+5. **Report** — every bare import is resolved against `node_modules`;
+   missing packages fail the build, CommonJS-only packages warn.
+
+The manifest (`manifest.json`) maps source paths → hashed URLs and source paths
+→ server artifacts. The dev server reads it at startup and:
+
+- serves `/_compiled/*` from an allow-list built from the manifest, so a
+  crafted path cannot escape the compiled directory
+- points the browser at hashed URLs via `/_framework/routes.json`
+- loads precompiled CommonJS in the module loader
+
+In development nothing is precompiled: the watcher keeps working on source.
+
 ## Live reload
 
 - Development only. `server.on('upgrade')` upgrades HTTP → WS, uses a minimal control-frame (no text message parser needed — just accepts the protocol and can send a 1-byte-ish ping/reload; it sends `reload` as a text frame by writing the header+payload for a single-frame text message `0x81 <len> ...`).

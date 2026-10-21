@@ -41,8 +41,10 @@ my-app/
 │   └── page.js         ← route: /
 │
 ├── styles/
-│   └── globals.css     ← global styles
+│   ├── globals.css     ← global styles
+│   └── tailwind.css    ← Tailwind source (--css tailwind)
 │
+├── tailwind.config.js  ← Tailwind theme/content (--css tailwind)
 ├── public/             ← optional static files and images
 ├── i18n.js             ← optional locale routing config
 ├── .aziz/              ← generated static HTML + ISR cache
@@ -66,6 +68,37 @@ my-app/
 - `<Image>`, `<Font>`, edge API routes and i18n routing are built in.
 
 See [Server Rendering, SSG, ISR, Streaming, Images & i18n](./docs/15-server-rendering-ssg-streaming.md).
+
+---
+
+## Production
+
+```bash
+npm run build   # precompile modules + prerender static pages
+npm start       # production server (Node 18+)
+```
+
+`npm run build` does two things:
+
+1. **Precompiles** every module into `.aziz/compiled` — JSX/TypeScript is
+   compiled once, at build time, instead of on every server start. The
+   production server loads those artifacts directly, so it never loads the
+   Babel compiler, and the browser imports content-hashed URLs that are
+   cached forever (`immutable`).
+2. **Prerenders** static pages into `.aziz/static` and seeds ISR entries.
+
+It also reports dependency problems that a bundler would normally catch:
+a missing package fails the build, and a CommonJS-only package (which cannot
+run in a browser) is a warning.
+
+In production the server also:
+
+- compresses text responses with brotli or gzip
+- adds `X-Content-Type-Options`, `X-Frame-Options` and `Referrer-Policy`
+- answers `GET /_aziz/health` with uptime, memory and build info
+- shuts down gracefully on `SIGTERM`, finishing in-flight requests
+
+See [Production & Deployment](./docs/12-production-and-deployment.md).
 
 ---
 
@@ -374,7 +407,8 @@ Edit `styles/globals.css` for global styles. Built-in utility classes:
 
 ### Tailwind CSS
 
-If you scaffolded with Tailwind, it is loaded via CDN with `primary` and `dark` colors pre-configured:
+If you scaffolded with Tailwind, it is compiled locally from
+`styles/tailwind.css` — no CDN and no production warning:
 
 ```js
 // Use Tailwind classes directly in any file
@@ -383,7 +417,9 @@ If you scaffolded with Tailwind, it is loaded via CDN with `primary` and `dark` 
 </div>
 ```
 
-To extend the config, edit the `tailwind.config` block in `index.html`.
+`npm run dev` rebuilds `styles/tailwind.output.css` when watched files change.
+`npm run build` compiles it minified, and `npm run css:build` rebuilds it on
+demand. Extend the theme in `tailwind.config.js`.
 
 ---
 

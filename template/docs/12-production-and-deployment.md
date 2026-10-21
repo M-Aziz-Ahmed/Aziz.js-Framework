@@ -2,6 +2,9 @@
 
 Aziz.js doesn't "bundle" to a huge build — it serves your source, compiles JSX on demand, and serves `/_modules/*` straight from `node_modules`. There's nothing to compile to a `dist/` directory.
 
+`npm run build` **does** precompile your modules, though: that is what keeps the
+production server fast. See [Precompiled build output](#precompiled-build-output).
+
 ## npm scripts
 
 ```json
@@ -9,21 +12,115 @@ Aziz.js doesn't "bundle" to a huge build — it serves your source, compiles JSX
   "scripts": {
     "dev":   "node scripts/dev-server.js",
     "build": "node scripts/build.js",
-    "start": "node scripts/dev-server.js --production"
+    "start": "node scripts/dev-server.js --production",
+    "css:build": "node scripts/build-css.js"
   }
 }
 ```
 
 **Running with `--production` (or `NODE_ENV=production`) changes behavior:**
 
+- **Precompiled modules** from `.aziz/compiled` are used instead of compiling
+  JSX on demand — the server never loads Babel.
 - **Prerendered HTML** from `.aziz/static` is served first; ISR entries from
   `.aziz/cache/isr` are served stale-while-revalidate.
+- **Hashed asset URLs** (`/_compiled/app/page.<hash>.js`) are served with
+  `Cache-Control: public, max-age=31536000, immutable`.
+- **Tailwind** is compiled to `styles/tailwind.output.css` during `npm run build`
+  when the app links it. No CDN is involved.
+- **Responses are compressed** (brotli or gzip) when the client accepts it.
+- **Security headers** are added: `X-Content-Type-Options`, `X-Frame-Options`,
+  `Referrer-Policy`.
 - **Streaming** stays on unless `AZIZ_STREAMING=0` (the build sets this for
   prerendering).
 - **No WebSocket live reload** server/client — the client script becomes an empty no-op.
 - **Cache headers**: HTML/JSON are `no-cache` (check ETag), most static assets get long-lived cache with `ETag` still checked.
 - **No verbose "Browser connected" / watcher spam** in the logs.
 - **Routes manifest still served** same way.
+
+## Precompiled build output
+
+`npm run build` compiles every module **once, at build time**, instead of on
+every server start:
+
+```
+.aziz/compiled/
+├── browser/app/page.<hash>.js    ESM, JSX stripped, imports → hashed URLs
+├── server/app/page.js.cjs        CommonJS for the server renderer
+└── manifest.json                 url ⇄ source map + dependency report
+```
+
+What that buys you, measured on a 300-page app:
+
+| | runtime Babel | precompiled |
+|---|---|---|
+| first request after a deploy | 194 ms | 52 ms |
+| median request | 2 ms | 2 ms |
+| resident memory per worker | 80 MB | 62 MB |
+| Babel in the production process | loaded | **never loaded** |
+
+The hash is derived from the file's source, so a URL only changes when the
+code changes — that is what makes `immutable` caching safe.
+
+**Deploy `.aziz/compiled`.** It is build output, so it is git-ignored: either
+run `npm run build` on the host, or build in CI and ship the `.aziz` directory
+along with the source.
+
+If `.aziz/compiled` is missing, the production server still works — it falls
+back to compiling on demand and says so in the log.
+
+## Dependency report (the no-bundler trap)
+
+A framework without a bundler can only ship packages that work in a browser.
+The build inspects every bare import and reports the two failure modes:
+
+```txt
+📦 3 browser dependencies: lodash@4.17.21, date-fns@4.1.0, zod@3.23.8
+⚠️  CommonJS-only (no browser/ESM build) — these will fail in the browser:
+     - moment: import it in an API route, or use a package with an ESM build.
+❌ Missing dependencies: vue
+```
+
+- **Missing** → the build fails. Run `npm install` and build again.
+- **CommonJS-only** → the build warns. A CommonJS package throws
+  `require is not defined` in the browser; the fix is to use it from an API
+  route (server-side) or pick a package with an ESM build.
+
+## Compression
+
+Text responses (HTML, JS, CSS, JSON, SVG) are compressed with brotli or gzip
+when the client sends `Accept-Encoding`. No dependency, no configuration.
+This matters more than usual here: without a bundler the browser downloads
+dozens of small ES modules, and every one of them is compressible.
+
+If a reverse proxy already compresses, it will simply pass through.
+
+## Health check
+
+```txt
+GET /_aziz/health
+```
+
+```json
+{
+  "ok": true,
+  "status": "healthy",
+  "uptime": 42,
+  "pid": 4711,
+  "memory": { "rss": 62, "heapUsed": 21 },
+  "precompiled": true,
+  "babel": "not loaded"
+}
+```
+
+`babel: "not loaded"` proves the production path never evaluated the
+compiler. Use it as a readiness probe.
+
+## Graceful shutdown
+
+`SIGTERM`/`SIGINT` stop the listener, finish in-flight requests, and exit
+with code 0. Systemd, Docker and Kubernetes all send `SIGTERM` before
+killing, so a rolling deploy will not cut responses in half.
 
 ## Locally testing production
 
@@ -43,6 +140,7 @@ Any host that can run **Node.js 18+** works. Examples: Render, Railway, Fly.io, 
 ```bash
 cd my-app
 npm ci        # clean install in CI/host
+npm run build # precompile + prerender (writes .aziz/)
 ```
 
 ### 2) Environment variables
@@ -66,16 +164,16 @@ If the platform requires a specific `start` command and binds to `$PORT`, this i
 Put Nginx, Caddy, or your load balancer in front for:
 
 - HTTPS termination
-- Compression (gzip/brotli)
 - Caching static assets aggressively
 - Forwarding `X-Forwarded-For` / real IPs (the dev server doesn't trust proxy headers — treat as internal unless you add it)
+
+Compression is already handled by the server, so `encode` is optional.
 
 Caddy example:
 
 ```txt
 example.com {
   reverse_proxy localhost:3000
-  encode zstd gzip
 }
 ```
 
@@ -92,10 +190,10 @@ in `.aziz/static`, and `npm start` serves it with the runtime behind it.
 
 ## Security notes
 
-- **Path traversal**: the server confines all static file requests to the project root. Attempts to escape (e.g. `..%2f..%2fpackage.json`) return `403`.
+- **Path traversal**: the server confines all static file requests to the project root. Attempts to escape (e.g. `..%2f..%2fpackage.json`) return `403`. Compiled assets are served from an allow-list built at build time, so `/_compiled/…` cannot be used to reach anything else.
 - **API CORS**: preflight `OPTIONS` and responses include permissive CORS headers — tighten if you only serve from one origin.
 - **JWT secrets**: never commit `.env`. Don't ship `node_modules` unnecessarily in git.
-- **Dependencies**: only `@babel/standalone` in `devDependencies` (needed to transform JSX on-the-fly). Your own deps go in `dependencies`.
+- **Dependencies**: `@babel/standalone` is a devDependency and is only needed to *build* now. Your own deps go in `dependencies`.
 - **ETag**: conditional requests use strong-ish ETag based on `mtimeMs`+`size`; fine for this use case.
 
 ## What "production mode" doesn't do
@@ -103,12 +201,13 @@ in `.aziz/static`, and `npm start` serves it with the runtime behind it.
 - No code splitting / tree shaking
 - No minification of JS/CSS (though you can pre-minify and reference extra files)
 - No `.env` auto-loading (you must set environment variables)
+- No multi-process clustering (run several instances behind a proxy)
 
 **Production mode does do:** SSR, SSG/ISR (`npm run build` + `revalidate`),
 streaming Suspense, server-rendered metadata, image resizing when `sharp` is
-installed, font preloads, edge API routes and i18n routing.
-
-This is by design for simplicity and speed. For most small–medium apps it's perfectly usable.
+available (installed by default as an optional dependency), font preloads,
+edge API routes, i18n routing, compression, hashed immutable assets and a
+health endpoint.
 
 ## Performance tips
 
@@ -117,10 +216,7 @@ This is by design for simplicity and speed. For most small–medium apps it's pe
 - **Keep keys stable** in lists (`key={id}`).
 - **Use HTTP caching** via a proxy for immutable assets (`.woff2`, images) if you add them.
 - **Close DB connections** or use a proper pool (the examples above do a singleton pool).
-
-## Health check (optional)
-
-You can hit `/api/hello` to quickly verify the server is up.
+- **Run the build in CI**: the precompiled output removes compile time from the request path entirely.
 
 ## Continue
 

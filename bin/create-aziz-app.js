@@ -151,17 +151,8 @@ function setupCSSFramework(targetDir, framework) {
         html = injectBody(html, `    <!-- Bootstrap 5 JS -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>`);
     } else if (framework === 'tailwind') {
-        html = injectHead(html, `    <!-- Tailwind CSS -->
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script>
-        tailwind.config = {
-            theme: {
-                extend: {
-                    colors: { primary: '#61dafb', dark: '#282c34' }
-                }
-            }
-        }
-    </script>`);
+        html = injectHead(html, `    <!-- Tailwind CSS (compiled from styles/tailwind.css) -->
+    <link rel="stylesheet" href="/styles/tailwind.output.css">`);
     }
     // 'none' → keep globals.css only
 
@@ -260,6 +251,7 @@ async function main() {
     fs.writeFileSync(path.join(targetDir, '.gitignore'), [
         'node_modules/',
         '.aziz/',
+        'styles/tailwind.output.css',
         '.DS_Store',
         '*.log',
         '',

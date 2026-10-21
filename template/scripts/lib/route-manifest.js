@@ -16,10 +16,15 @@ function matchFile(base, name) {
     return name.slice(0, dot) === base && PAGE_EXT.includes(name.slice(dot).toLowerCase());
 }
 
-function buildRouteManifest(root) {
+function buildRouteManifest(root, options = {}) {
     const manifest = [];
     const appDir = path.join(root, 'app');
     if (!fs.existsSync(appDir)) return manifest;
+
+    // `compiled` maps a project-relative source path to the content-hashed
+    // URL the browser should import in production. Unset (dev, or a build
+    // that predates precompilation) keeps the plain source path.
+    const compiled = options.compiled || null;
 
     const filePathFor = (routeBase, fileName) =>
         '/app' + (routeBase === '/' ? '' : routeBase) + '/' + fileName;
@@ -35,7 +40,12 @@ function buildRouteManifest(root) {
             }
 
             const name = entry.name;
-            const base = { pathname: routeBase || '/', filePath: filePathFor(routeBase, name), file: fullPath };
+            const rel = path.relative(root, fullPath).replace(/\\/g, '/');
+            const base = {
+                pathname: routeBase || '/',
+                filePath: (compiled && compiled.get(rel)) || filePathFor(routeBase, name),
+                file: fullPath,
+            };
 
             if (matchFile('page', name)) manifest.push({ type: 'page', ...base });
             else if (matchFile('layout', name)) manifest.push({ type: 'layout', ...base });
@@ -67,8 +77,8 @@ function loadI18nConfig(root) {
     return null;
 }
 
-function buildServerRoutes(root) {
-    const manifest = buildRouteManifest(root);
+function buildServerRoutes(root, options = {}) {
+    const manifest = buildRouteManifest(root, options);
     const pages = {};
     const layouts = manifest.filter(e => e.type === 'layout').map(e => ({ path: e.pathname, file: e.file }));
     const loadings = manifest.filter(e => e.type === 'loading').map(e => ({ path: e.pathname, file: e.file }));

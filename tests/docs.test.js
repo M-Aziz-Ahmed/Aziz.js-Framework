@@ -74,8 +74,25 @@ test('project-structure doc does not claim files that do not ship', () => {
             `02-project-structure.md still claims ${ghost} ships`);
     }
     // And it should mention the modules 3.2.0 added.
-    for (const real of ['metadata.js', 'suspense.js']) {
+    for (const real of ['metadata.js', 'suspense.js',
+                        'build-css.js', 'tailwind.config.js']) {
         assert.ok(doc.includes(real), `02-project-structure.md omits ${real}`);
+    }
+});
+
+test('Tailwind is compiled locally and sharp installs by default', () => {
+    const pkg = JSON.parse(fs.readFileSync(path.join(REPO, 'template', 'package.json'), 'utf8'));
+    assert.ok(pkg.devDependencies.tailwindcss, 'tailwindcss must be a dev dependency');
+    assert.ok(pkg.optionalDependencies.sharp, 'sharp must be an optional dependency');
+    assert.equal(pkg.scripts['css:build'], 'node scripts/build-css.js');
+
+    const scaffolder = fs.readFileSync(path.join(REPO, 'bin', 'create-aziz-app.js'), 'utf8');
+    assert.ok(scaffolder.includes('/styles/tailwind.output.css'));
+    assert.ok(!scaffolder.includes('cdn.tailwindcss.com'),
+        'Tailwind must not be loaded from the CDN');
+
+    for (const file of ['scripts/build-css.js', 'scripts/lib/tailwind.js', 'tailwind.config.js']) {
+        assert.ok(fs.existsSync(path.join(REPO, 'template', file)), `missing ${file}`);
     }
 });
 

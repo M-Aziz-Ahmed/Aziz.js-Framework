@@ -3,6 +3,7 @@
 # devDependencies in package.json.
 node_modules/
 .aziz/
+styles/tailwind.output.css
 
 # Packed build artifacts. npm publish generates these from `files`
 # (["bin", "template"]); committing them only serves to go stale.

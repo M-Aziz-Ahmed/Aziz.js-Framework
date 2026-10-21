@@ -31,7 +31,32 @@ function walkCSS(dir, out) {
     }
 }
 
-function collectFontPreloads(root) {
+// The preload list is the same for every request, but collecting it
+// means walking styles/ and app/ and reading every CSS file. On a
+// 300-page app that is tens of milliseconds per request, so the
+// result is cached and only refreshed when the CSS changes.
+const preloadCache = new Map(); // root → { links, at }
+
+const PRODUCTION = process.argv.includes('--production') || process.env.NODE_ENV === 'production';
+const CACHE_TTL = PRODUCTION ? 60_000 : 1_000;
+
+function collectFontPreloads(root, options = {}) {
+    const ttl = options.ttl !== undefined ? options.ttl : CACHE_TTL;
+    const now = Date.now();
+    const hit = preloadCache.get(root);
+    if (hit && (ttl === Infinity || now - hit.at < ttl)) return hit.links;
+
+    const links = scanFontPreloads(root);
+    preloadCache.set(root, { links, at: now });
+    return links;
+}
+
+// Call when a stylesheet changes (dev server file watcher).
+function invalidateFontPreloads() {
+    preloadCache.clear();
+}
+
+function scanFontPreloads(root) {
     const files = [];
     walkCSS(path.join(root, 'styles'), files);
     walkCSS(path.join(root, 'app'), files);
@@ -70,4 +95,5 @@ module.exports = {
     FONT_TYPES,
     optimizeCSS,
     collectFontPreloads,
+    invalidateFontPreloads,
 };

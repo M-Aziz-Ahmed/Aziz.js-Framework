@@ -157,6 +157,9 @@ class ServerModuleLoader {
         this.cache = new Map();
         this.context = vm.createContext(this.createSandbox());
         this.servedFiles = new Set();
+        // Precompiled CommonJS artifacts (absolute source path → artifact).
+        // When present the server never invokes Babel: the build already did.
+        this.precompiled = options.precompiled || new Map();
     }
 
     createSandbox() {
@@ -268,14 +271,27 @@ class ServerModuleLoader {
             return exports;
         }
 
-        const source = fs.readFileSync(resolved, 'utf8');
-        const isServerModule = SERVER_MODULE_RE.test(resolved) || /^\s*['"]use server['"]/.test(source);
+        const artifact = this.precompiled.get(resolved);
+        let source = '';
+        let isServerModule = artifact ? !!artifact.serverModule : false;
+        if (fs.existsSync(resolved)) {
+            source = fs.readFileSync(resolved, 'utf8');
+            isServerModule = isServerModule ||
+                SERVER_MODULE_RE.test(resolved) ||
+                /^\s*['"]use server['"]/.test(source);
+        }
 
         let code;
-        try {
-            code = transformCommonJS(source, path.basename(resolved));
-        } catch (err) {
-            throw new Error(`Failed to compile ${path.relative(this.root, resolved)}: ${err.message}`);
+        if (artifact && fs.existsSync(artifact.file)) {
+            // Built ahead of time by `npm run build` — no Babel in the
+            // request path.
+            code = fs.readFileSync(artifact.file, 'utf8');
+        } else {
+            try {
+                code = transformCommonJS(source, path.basename(resolved));
+            } catch (err) {
+                throw new Error(`Failed to compile ${path.relative(this.root, resolved)}: ${err.message}`);
+            }
         }
 
         const module = { exports: {} };

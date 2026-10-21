@@ -14,7 +14,7 @@ const path   = require('path');
 const http   = require('http');
 const crypto = require('crypto');
 
-const { hasBabel, transformModule, invalidate: invalidateTransform } = require('./lib/js-transform');
+const { hasBabelAvailable, transformModule, invalidate: invalidateTransform } = require('./lib/js-transform');
 const { resolveNodeModule } = require('./lib/module-resolver');
 const apiRouter = require('./lib/api-router');
 const { buildRouteManifest, buildServerRoutes } = require('./lib/route-manifest');
@@ -24,10 +24,34 @@ const renderer = require('./lib/renderer');
 const staticStore = require('./lib/static-store');
 const imageOptimizer = require('./lib/image-optimizer');
 const fontOptimizer = require('./lib/font-optimizer');
+const tailwind = require('./lib/tailwind');
+const precompile = require('./lib/precompile');
+const compression = require('./lib/compression');
 
 const PORT = parseInt(process.env.PORT, 10) || 3000;
 const ROOT = process.cwd();
 const PRODUCTION = process.argv.includes('--production') || process.env.NODE_ENV === 'production';
+const TAILWIND = tailwind.isEnabled(ROOT);
+
+// ─── Production build output ─────────────────────────────────
+//
+// `npm run build` precompiles every module to .aziz/compiled. When
+// that output exists the production server reads it instead of
+// invoking Babel, and the browser imports content-hashed URLs that
+// can be cached forever.
+const COMPILE_MANIFEST = PRODUCTION ? precompile.readManifest(ROOT) : null;
+const COMPILED_URLS = precompile.browserUrlMap(COMPILE_MANIFEST);
+const COMPILED_ASSETS = precompile.browserAssetMap(COMPILE_MANIFEST);
+const PRECOMPILED_SERVER = precompile.serverArtifactMap(ROOT, COMPILE_MANIFEST);
+
+if (TAILWIND && process.env.AZIZ_SKIP_CSS !== '1') {
+    const css = tailwind.build(ROOT, { minify: PRODUCTION });
+    if (css.ok) {
+        console.log('🎨 Tailwind CSS compiled');
+    } else {
+        console.warn(`⚠️  Tailwind CSS failed: ${css.reason}`);
+    }
+}
 
 const clients = new Set();
 let apiRoutes = [];
@@ -107,7 +131,9 @@ function box(lines) {
     ].join('\n');
 }
 
-if (!hasBabel()) {
+// Babel is only needed when something must be compiled at runtime. A
+// production server running precompiled modules never loads it.
+if (!hasBabelAvailable() && !(PRODUCTION && COMPILE_MANIFEST)) {
     console.log(box([
         '@babel/standalone is NOT installed — JSX cannot be compiled.',
         '',
@@ -123,8 +149,18 @@ if (!hasBabel()) {
 }
 
 if (!imageOptimizer.hasSharp()) {
-    console.log('🖼️  sharp is not installed — <Image> still caches and lazy-loads, but will not resize.');
-    console.log('    Optional: npm install sharp\n');
+    console.log('🖼️  sharp is unavailable — <Image> still caches and lazy-loads, but will not resize.');
+    console.log('    Fix: npm install sharp (it ships as an optional dependency)\n');
+}
+
+if (PRODUCTION) {
+    if (COMPILE_MANIFEST) {
+        const count = Object.keys(COMPILE_MANIFEST.files || {}).length;
+        console.log(`⚡ Precompiled build loaded — ${count} module(s), no Babel in the request path.`);
+    } else {
+        console.log('⚠️  No build output found (.aziz/compiled). Run "npm run build" to precompile.');
+        console.log('    Falling back to on-the-fly compilation (slower cold start).\n');
+    }
 }
 
 console.log(`🚀 Aziz.js dev server starting${PRODUCTION ? ' (production mode)' : ''}...\n`);
@@ -135,12 +171,12 @@ console.log(`🚀 Aziz.js dev server starting${PRODUCTION ? ' (production mode)'
 
 // ─── Page routes / SSR state ─────────────────────────────────
 
-let pageLoader = new ServerModuleLoader(ROOT);
+let pageLoader = new ServerModuleLoader(ROOT, { precompiled: PRECOMPILED_SERVER });
 let serverRoutes = { pages: {}, layouts: [], i18n: null, notFoundFile: null };
 const isrInFlight = new Map();
 
 async function reloadPageRoutes(verbose = true) {
-    serverRoutes = buildServerRoutes(ROOT);
+    serverRoutes = buildServerRoutes(ROOT, { compiled: COMPILED_URLS });
     pageLoader.clear();
     if (verbose) {
         const count = Object.keys(serverRoutes.pages).length;
@@ -298,13 +334,55 @@ function pageCacheHeaders(dynamic, revalidate) {
     return { 'Cache-Control': 'public, max-age=0, must-revalidate' };
 }
 
+// ─── Response helpers ─────────────────────────────────────────
+
+// Security headers applied to every production response. Cheap, and
+// they close the obvious holes (MIME sniffing, clickjacking, referrer
+// leaking).
+const SECURITY_HEADERS = PRODUCTION ? {
+    'X-Content-Type-Options': 'nosniff',
+    'X-Frame-Options': 'SAMEORIGIN',
+    'Referrer-Policy': 'strict-origin-when-cross-origin',
+} : {};
+
 function sendHtml(req, res, html, status = 200, extraHeaders = {}) {
-    res.writeHead(status, {
+    const body = Buffer.from(String(html));
+    const headers = {
         'Content-Type': 'text/html; charset=utf-8',
         'X-Aziz-Render': 'server',
+        ...SECURITY_HEADERS,
         ...extraHeaders,
-    });
+    };
+
+    const compressed = compression.compress(req, body, headers['Content-Type']);
+    if (compressed) {
+        res.writeHead(status, {
+            ...headers,
+            ...compressed.headers,
+            'Content-Length': compressed.body.length,
+        });
+        res.end(req.method === 'HEAD' ? undefined : compressed.body);
+        return;
+    }
+
+    res.writeHead(status, headers);
     res.end(req.method === 'HEAD' ? undefined : html);
+}
+
+// Sends a buffer with compression when it helps.
+function sendBuffer(req, res, buffer, headers, status = 200) {
+    const compressed = compression.compress(req, buffer, headers['Content-Type']);
+    if (compressed) {
+        res.writeHead(status, {
+            ...headers,
+            ...compressed.headers,
+            'Content-Length': compressed.body.length,
+        });
+        res.end(req.method === 'HEAD' ? undefined : compressed.body);
+        return;
+    }
+    res.writeHead(status, headers);
+    res.end(req.method === 'HEAD' ? undefined : buffer);
 }
 
 function notFoundInfo(pathname) {
@@ -666,15 +744,44 @@ const server = http.createServer(async (req, res) => {
         return;
     }
 
+    // ── Health check (load balancers, uptime monitors, k8s probes)
+    if (urlWithoutQuery === '/_aziz/health' || urlWithoutQuery === '/healthz') {
+        const body = Buffer.from(JSON.stringify({
+            ok: true,
+            status: 'healthy',
+            uptime: Math.round(process.uptime()),
+            pid: process.pid,
+            version: process.env.AZIZ_VERSION || null,
+            memory: {
+                rss: Math.round(process.memoryUsage().rss / 1048576),
+                heapUsed: Math.round(process.memoryUsage().heapUsed / 1048576),
+            },
+            precompiled: !!COMPILE_MANIFEST,
+            // "not loaded" proves the production path never touched Babel.
+            babel: Object.keys(require.cache).some(k => k.includes('@babel')) ? 'loaded' : 'not loaded',
+        }));
+        sendBuffer(req, res, body, {
+            'Content-Type': 'application/json; charset=utf-8',
+            'Cache-Control': 'no-store',
+            ...SECURITY_HEADERS,
+        });
+        return;
+    }
+
     // ── Route manifest (used by the client router to discover pages)
     if (urlWithoutQuery === '/_framework/routes.json') {
-        const manifest = buildRouteManifest(ROOT);
-        res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', ...NO_CACHE });
-        res.end(JSON.stringify({
+        const manifest = buildRouteManifest(ROOT, { compiled: COMPILED_URLS });
+        const body = Buffer.from(JSON.stringify({
             dev: !PRODUCTION,
-            routes: manifest,
+            // `file` holds an absolute server path — never send it to the browser.
+            routes: manifest.map(({ pathname, filePath, type }) => ({ pathname, filePath, type })),
             i18n: serverRoutes.i18n,
         }));
+        sendBuffer(req, res, body, {
+            'Content-Type': 'application/json; charset=utf-8',
+            ...NO_CACHE,
+            ...SECURITY_HEADERS,
+        });
         return;
     }
 
@@ -760,6 +867,36 @@ const server = http.createServer(async (req, res) => {
             res.writeHead(500);
             res.end('Error reading module: ' + err.message);
         }
+        return;
+    }
+
+    // ── Precompiled assets: /_compiled/app/page.<hash>.js
+    //
+    // Content-hashed, so they can be cached forever. Produced by
+    // `npm run build`; the browser never sees the source path.
+    if (urlWithoutQuery.startsWith('/_compiled/')) {
+        // Only artifacts the build declared are reachable — a crafted
+        // path cannot escape the compiled directory.
+        const rel = COMPILED_ASSETS.get(urlWithoutQuery);
+        if (!rel) {
+            res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8', ...NO_CACHE });
+            res.end('Not found');
+            return;
+        }
+        const target = path.join(ROOT, '.aziz', 'compiled', 'browser', rel);
+        if (!fs.existsSync(target)) {
+            res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8', ...NO_CACHE });
+            res.end('Not found');
+            return;
+        }
+        const stat = fs.statSync(target);
+        const body = fs.readFileSync(target);
+        sendBuffer(req, res, body, {
+            'Content-Type': 'text/javascript; charset=utf-8',
+            'Cache-Control': 'public, max-age=31536000, immutable',
+            'ETag': `"${stat.size.toString(36)}-${stat.mtimeMs.toString(36)}"`,
+            ...SECURITY_HEADERS,
+        });
         return;
     }
 
@@ -858,6 +995,7 @@ const server = http.createServer(async (req, res) => {
             'Content-Type': contentType,
             ...cacheHeadersFor(fileExt, isHtml),
             'ETag': etagFor(stat),
+            ...SECURITY_HEADERS,
         };
 
         // Conditional request → 304
@@ -878,8 +1016,7 @@ const server = http.createServer(async (req, res) => {
             content = Buffer.from(fontOptimizer.optimizeCSS(content.toString()));
         }
 
-        res.writeHead(200, headers);
-        res.end(content);
+        sendBuffer(req, res, content, headers);
     } catch (err) {
         res.writeHead(500);
         res.end('Server error: ' + err.message);
@@ -942,6 +1079,17 @@ function notifyClients() {
 const watchDirs = ['app', 'api', 'components', 'lib', 'models', 'styles', '_framework'];
 const SERVER_CODE_DIRS = new Set(['api', 'lib', 'models']);
 let reloadTimer = null;
+let tailwindTimer = null;
+
+function rebuildTailwind() {
+    if (!TAILWIND || PRODUCTION) return;
+    clearTimeout(tailwindTimer);
+    tailwindTimer = setTimeout(() => {
+        const css = tailwind.build(ROOT, { minify: false });
+        if (css.ok) notifyClients();
+        else console.warn(`⚠️  Tailwind CSS failed: ${css.reason}`);
+    }, 200);
+}
 
 if (!PRODUCTION) {
     console.log('👀 Watching:');
@@ -954,8 +1102,15 @@ if (!PRODUCTION) {
         try {
             fs.watch(full, { recursive: true }, (_, filename) => {
                 if (!filename) return;
+                if (dir === 'styles' &&
+                    (filename === 'tailwind.output.css' || filename.endsWith('.map'))) return;
+
                 const ext = path.extname(filename);
                 if (!['.js', '.jsx', '.mjs', '.ts', '.tsx', '.css', '.json'].includes(ext)) return;
+
+                if (ext === '.css') fontOptimizer.invalidateFontPreloads();
+
+                rebuildTailwind();
 
                 console.log(`\n📝 Changed: ${dir}/${filename}`);
 
@@ -1006,9 +1161,66 @@ if (!PRODUCTION) {
             console.warn(`   ⚠️ Could not watch ${name}: ${err.message}`);
         }
     }
+
+    if (TAILWIND) {
+        const config = path.join(ROOT, 'tailwind.config.js');
+        console.log('   - tailwind.config.js');
+        try {
+            fs.watch(config, () => {
+                console.log('\n🎨 Changed: tailwind.config.js');
+                rebuildTailwind();
+            });
+        } catch (err) {
+            console.warn(`   ⚠️ Could not watch tailwind.config.js: ${err.message}`);
+        }
+    }
 }
 
 // ─── Start ────────────────────────────────────────────────────
+
+// Slowloris protection and connection hygiene.
+server.requestTimeout = 30_000;
+server.headersTimeout = 35_000;
+server.keepAliveTimeout = 5_000;
+server.maxRequestsPerSocket = 0;
+
+// ─── Graceful shutdown ────────────────────────────────────────
+//
+// A production server must finish in-flight requests when the process
+// manager (systemd, Docker, Kubernetes) asks it to stop. Without this
+// the container is SIGKILLed mid-response.
+let shuttingDown = false;
+
+function shutdown(signal) {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`\n👋 ${signal} received — shutting down gracefully...`);
+
+    // Tell live-reload clients to stop reconnecting.
+    for (const client of clients) {
+        try { client.send('shutdown'); } catch { /* ignore */ }
+    }
+    clients.clear();
+
+    const force = setTimeout(() => {
+        console.log('⚠️  Forcing exit after 10s');
+        process.exit(1);
+    }, 10_000);
+    force.unref();
+
+    server.close(() => {
+        console.log('✅ Shutdown complete');
+        process.exit(0);
+    });
+    // Stop accepting new keep-alive connections.
+    if (typeof server.closeIdleConnections === 'function') server.closeIdleConnections();
+}
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('unhandledRejection', (reason) => {
+    console.error('❌ Unhandled rejection:', reason);
+});
 
 function startServer(port) {
     server.listen(port, () => {

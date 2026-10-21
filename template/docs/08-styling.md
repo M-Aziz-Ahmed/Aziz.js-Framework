@@ -48,12 +48,17 @@ npx create-aziz-app my-app --css none
 ```
 
 - **bootstrap** — adds Bootstrap 5 + Bootstrap Icons (CDN `<link>`/`<script>` injected into `index.html`).
-- **tailwind** — adds the Tailwind CDN `<script>` plus a `tailwind.config` block with `primary`/`dark` colors.
+- **tailwind** — links `/styles/tailwind.output.css`, compiled locally from
+  `styles/tailwind.css` with the Tailwind CLI and `tailwind.config.js`
+  (`primary`/`dark` colors are configured). No CDN and no production warning.
 - **none** — just your `globals.css`.
 
-The flag injects tags into `index.html` before `</head>` / `</body>`. Because these are CDNs, an internet connection is required at runtime.
+`npm install` includes the Tailwind CLI. The dev server compiles Tailwind on
+startup and again when watched source files change. `npm run build` compiles a
+minified stylesheet before prerendering; `npm run css:build` does it on demand.
+The generated `styles/tailwind.output.css` is git-ignored.
 
-> Prefer to install CSS locally (e.g. `npm i tailwindcss` + a build step) if you need offline/production builds — the CDN approach is for speed in development.
+Bootstrap remains CDN-based, so it requires an internet connection at runtime.
 
 ## Scoped styles?
 

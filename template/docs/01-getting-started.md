@@ -75,17 +75,20 @@ Defined in your project's `package.json`:
     "dev":   "node scripts/dev-server.js",
     "build": "node scripts/build.js",
     "start": "node scripts/dev-server.js --production",
+    "css:build": "node scripts/build-css.js",
     "test":  "node --test"
   }
 }
 ```
 
-- `npm run dev` — development server with live reload and no caching.
+- `npm run dev` — development server with live reload, no caching and automatic
+  Tailwind rebuilds when the app uses Tailwind.
 - `npm run build` — boots the production server, prerenders static/ISR pages into
-  `.aziz/static`, and writes the static manifest. It is not a bundler: source is
-  still compiled on demand.
+  `.aziz/static`, and writes the static manifest. It compiles Tailwind first. It
+  is not a bundler: source is still compiled on demand.
 - `npm start` — production server with no live-reload socket, cache headers, SSR,
   static files and ISR.
+- `npm run css:build` — rebuilds `styles/tailwind.output.css` on demand.
 - `npm test` — runs any `**/*.test.js` files via Node's built-in test runner. With no tests present it exits 0.
 
 ## Your first page

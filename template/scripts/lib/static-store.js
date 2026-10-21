@@ -40,17 +40,40 @@ function fileForStatic(root, pathname) {
     return path.join(staticDir(root), safe, 'index.html');
 }
 
+// The manifest holds one entry per prerendered page. Parsing it on
+// every request is O(pages) per request, so it is cached and
+// re-read only when the file changes on disk.
+const manifestCache = new Map(); // root → { mtimeMs, manifest }
+
 function loadManifest(root) {
+    const file = manifestPath(root);
+    let mtimeMs = 0;
     try {
-        return JSON.parse(fs.readFileSync(manifestPath(root), 'utf8'));
+        mtimeMs = fs.statSync(file).mtimeMs;
     } catch {
         return { pages: {} };
     }
+
+    const hit = manifestCache.get(root);
+    if (hit && hit.mtimeMs === mtimeMs) return hit.manifest;
+
+    let manifest;
+    try {
+        manifest = JSON.parse(fs.readFileSync(file, 'utf8'));
+    } catch {
+        return { pages: {} };
+    }
+    manifestCache.set(root, { mtimeMs, manifest });
+    return manifest;
 }
 
 function saveManifest(root, manifest) {
     fs.mkdirSync(path.dirname(manifestPath(root)), { recursive: true });
-    fs.writeFileSync(manifestPath(root), JSON.stringify(manifest, null, 2) + '\n');
+    const file = manifestPath(root);
+    fs.writeFileSync(file, JSON.stringify(manifest, null, 2) + '\n');
+    let mtimeMs = 0;
+    try { mtimeMs = fs.statSync(file).mtimeMs; } catch { /* ignore */ }
+    manifestCache.set(root, { mtimeMs, manifest });
 }
 
 function writeStatic(root, pathname, html, meta = {}) {
@@ -105,8 +128,12 @@ function writeISR(root, pathname, entry) {
     return entry;
 }
 
+// Removes the rendered output (prerendered pages + ISR cache) but
+// keeps the rest of .aziz/ — notably .aziz/compiled, the precompiled
+// modules written by the build step.
 function clear(root) {
-    fs.rmSync(azizDir(root), { recursive: true, force: true });
+    fs.rmSync(staticDir(root), { recursive: true, force: true });
+    fs.rmSync(isrDir(root), { recursive: true, force: true });
 }
 
 module.exports = {

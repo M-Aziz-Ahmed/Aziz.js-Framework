@@ -34,11 +34,12 @@ function scaffold(files) {
         fs.cpSync(path.join(TEMPLATE, sub), path.join(dir, sub), { recursive: true });
     }
     fs.copyFileSync(path.join(TEMPLATE, 'index.html'), path.join(dir, 'index.html'));
-    // @babel/standalone is a devDependency; symlink it so JSX compiles.
-    const nm = path.join(TEMPLATE, 'node_modules', '@babel');
-    if (fs.existsSync(nm)) {
+    // @babel/standalone is a devDependency; link the package itself (not its
+    // parent directory) so the dev server can compile JSX like a real install.
+    const babelPkg = path.join(TEMPLATE, 'node_modules', '@babel', 'standalone');
+    if (fs.existsSync(babelPkg)) {
         fs.mkdirSync(path.join(dir, 'node_modules', '@babel'), { recursive: true });
-        fs.symlinkSync(nm, path.join(dir, 'node_modules', '@babel', 'standalone'), 'junction');
+        fs.symlinkSync(babelPkg, path.join(dir, 'node_modules', '@babel', 'standalone'), 'junction');
     }
     for (const [rel, content] of Object.entries(files)) {
         const f = path.join(dir, rel);
@@ -614,6 +615,30 @@ test('BUGFIX: metadata renders the full head, not just title/description', async
     assert.equal(head.name('twitter:card'), 'summary_large_image');
     assert.equal(head.name('twitter:creator'), '@aziz');
     assert.equal(head.link('canonical'), 'https://example.com/');
+});
+
+test('metadata upsert uses valid selectors (no malformed querySelector)', async () => {
+    const { document } = installDOM();
+    const selectors = [];
+    document.head.querySelector = selector => {
+        selectors.push(selector);
+        return null;
+    };
+    const { metadata } = await loadFramework(['metadata.js']);
+
+    metadata.applyMetadata({
+        description: 'A description',
+        openGraph: { title: 'OG Title' },
+        canonical: '/canonical',
+    });
+
+    assert.ok(selectors.includes('meta[name="description"]'));
+    assert.ok(selectors.includes('meta[property="og:title"]'));
+    assert.ok(selectors.includes('link[rel="canonical"]'));
+    assert.ok(selectors.every(selector =>
+        /^meta\[(?:name|property)="[^"]+"\]$/.test(selector) ||
+        selector === 'link[rel="canonical"]'
+    ), `unexpected selector: ${selectors.join(', ')}`);
 });
 
 test('page metadata deep-merges over layout metadata', async () => {

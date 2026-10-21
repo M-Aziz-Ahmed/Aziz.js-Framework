@@ -59,6 +59,25 @@ Measured at v3.2.0, Node 24.16, Windows. Next.js figures come from the npm regis
 
 **Caveats we won't bury:** nothing is minified, tree-shaken or code-split. `@babel/standalone` is 36.7 MB on disk. Both are true, and both are consequences of having no bundler.
 
+### The Babel tax, and how the build removes it
+
+`@babel/standalone` is a dev dependency, but a *runtime* compiler is still a
+tax: it costs ~64 MB of resident memory and ~22 ms per module. Measured on a
+300-page app (302 modules):
+
+| | compile on demand | `npm run build` (precompiled) |
+| --- | --- | --- |
+| first request after a deploy | 194 ms | **52 ms** |
+| median request | 2 ms | 2 ms |
+| resident memory per worker | 80 MB | **62 MB** |
+| Babel loaded in production | yes | **never** |
+
+`npm run build` compiles every module once into `.aziz/compiled`, writes
+content-hashed URLs the browser can cache forever (`immutable`), and the
+production server loads the precompiled CommonJS instead of invoking Babel.
+Babel is loaded lazily, so a precompiled production process never evaluates
+it — `GET /_aziz/health` reports `"babel": "not loaded"`.
+
 ## Vs Next.js
 
 ### Where Aziz.js matches Next.js
@@ -75,11 +94,12 @@ SSR + hydration · file-based routing · nested & dynamic (`[slug]`) and catch-a
 | Streaming | ✅ route-level (`loading.js`) and `<Suspense>` boundaries |
 | `<Suspense>` / partial in-place swap | ✅ component boundaries stream and swap; not a concurrent renderer |
 | Route prefetching | ✅ automatic viewport prefetch + declared data warm-up |
-| Image optimization | ✅ `<Image>` + `/_aziz/image` (resizing needs optional `sharp`) |
+| Image optimization | ✅ `<Image>` + `/_aziz/image` (`sharp` optional dependency, installed by default) |
 | Font optimization | ✅ `<Font>`, `font-display:swap`, automatic preloads |
 | Metadata | ✅ server-rendered `<head>` |
 | Edge runtime | ⚠️ API routes with `runtime = 'edge'` (capability boundary, not an isolate) |
 | i18n routing | ✅ locale prefixes, `[locale]` routes, cookie/`Accept-Language` |
+| Production hardening | ✅ precompiled build (no Babel at runtime), brotli/gzip, hashed immutable assets, health endpoint, graceful shutdown, security headers, dependency preflight |
 | Ecosystem & docs | ⚠️ intentionally small |
 | Battle-tested at scale | ❌ one maintainer; security policy is now published |
 
@@ -433,8 +453,8 @@ There is **no bundler**, so any module a page can import is served from disk. Th
    there is no React Server Component protocol or client-reference graph.
 2. **No type checking.** Types are stripped, not verified.
 3. **No bundler.** No minification, tree-shaking or code splitting.
-4. **Image resizing needs `sharp`.** Without it, `/_aziz/image` caches and
-   serves the original bytes.
+4. **Image resizing needs `sharp`.** It is an optional dependency installed by
+   default; if unavailable, `/_aziz/image` serves the original bytes.
 5. **Edge runtime is a `vm` capability boundary**, not a V8 isolate.
 6. **ISR is single-instance.** `.aziz/cache/isr` is local to the server.
 7. **Streaming boundaries are DOM swaps** and do not preserve listeners inside

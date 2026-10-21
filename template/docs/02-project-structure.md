@@ -16,6 +16,9 @@ my-app/
 |
 |-- styles/                 CSS
 |   |-- globals.css
+|   |-- tailwind.css        optional: Tailwind source (--css tailwind)
+|   `-- tailwind.output.css compiled locally (gitignored)
+|-- tailwind.config.js      optional: Tailwind content/theme config
 |
 |-- _framework/             the framework itself (do not edit casually)
 |   |-- runtime.js          h(), fibers, DOM materialization, hydration
@@ -32,9 +35,11 @@ my-app/
 |-- scripts/                dev server + tooling
 |   |-- dev-server.js       the HTTP server (dev + production, SSR/ISR)
 |   |-- build.js            SSG/ISR build pipeline
+|   |-- build-css.js        optional: compile Tailwind on demand
 |   |-- live-reload-client.js
 |   `-- lib/                server renderer, module loader, page router,
-|                           api-router, i18n, image/font optimizers
+|                           api-router, i18n, image/font optimizers,
+|                           tailwind build helper
 |
 `-- docs/                   these guides (optional, --no-docs to skip)
 ```
@@ -88,7 +93,8 @@ Both styles are supported — see [API Routes](./06-api-routes.md).
 4. Resolves **bare npm imports** (`import mongoose from 'mongoose'`) via `/_modules/mongoose`.
 5. Dispatches **API requests** to `api/**` and `app/api/**/route.js` (Node or edge runtime).
 6. Serves static files, optimizes images/fonts and enforces the **server-only boundary**.
-7. In development, opens a **WebSocket** and pushes reload events when you save.
+7. Compiles Tailwind to `styles/tailwind.output.css` when the generated app links it.
+8. In development, opens a **WebSocket** and pushes reload events when you save.
 
 ## Conventions worth keeping
 
