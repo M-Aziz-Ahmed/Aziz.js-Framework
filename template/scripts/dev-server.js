@@ -474,13 +474,13 @@ async function servePage(req, res, url, rawPath) {
 
     // Pre-rendered documents win in production, including ISR entries.
     if (PRODUCTION) {
-        const staticEntry = staticStore.readStatic(ROOT, requestPath);
+        const staticEntry = await staticStore.readStatic(ROOT, requestPath);
         const info = resolvePage(requestPath, pathname);
         const mod = info.info.pageFile ? safeLoadPage(info.info.pageFile) : null;
         const revalidate = mod && Number(mod.revalidate);
 
         // A regenerated ISR entry is newer than the build-time document.
-        const isrEntry = staticStore.readISR(ROOT, requestPath);
+        const isrEntry = await staticStore.readISR(ROOT, requestPath);
         if (isrEntry && (!staticEntry || isrEntry.at > (staticEntry.meta.generatedAt || 0))) {
             sendHtml(req, res, isrEntry.html, isrEntry.status || 200, {
                 ...pageCacheHeaders('auto', isrEntry.revalidate),
@@ -583,7 +583,7 @@ async function servePage(req, res, url, rawPath) {
     const pageMod = resolved.info.pageFile ? safeLoadPage(resolved.info.pageFile) : null;
     const revalidate = pageMod && Number(pageMod.revalidate);
     if (PRODUCTION && resolved.found && revalidate > 0) {
-        staticStore.writeISR(ROOT, requestPath, {
+        await staticStore.writeISR(ROOT, requestPath, {
             html: doc,
             status: finalStatus,
             revalidate,
@@ -602,6 +602,13 @@ function safeLoadPage(file) {
 
 function regenerateISR(req, storePath, pathname, info, locale, revalidate) {
     if (isrInFlight.has(storePath)) return isrInFlight.get(storePath);
+
+    // Cross-process lock: with several instances sharing a cache
+    // volume, only one regenerates the stale page. The others keep
+    // serving the stale copy until the new one lands.
+    const release = staticStore.acquireLock(ROOT, storePath);
+    if (!release) return null;
+
     const job = (async () => {
         try {
             const result = await renderDocument({
@@ -619,7 +626,7 @@ function regenerateISR(req, storePath, pathname, info, locale, revalidate) {
                 { ...result, ...final, done: undefined, shell: undefined },
                 { lang: locale || 'en' }
             );
-            staticStore.writeISR(ROOT, storePath, {
+            await staticStore.writeISR(ROOT, storePath, {
                 html: doc,
                 status: final.status || 200,
                 revalidate,
@@ -628,6 +635,7 @@ function regenerateISR(req, storePath, pathname, info, locale, revalidate) {
             console.warn(`⚠️  ISR regeneration failed for ${storePath}: ${err.message}`);
         } finally {
             isrInFlight.delete(storePath);
+            release();
         }
     })();
     isrInFlight.set(storePath, job);

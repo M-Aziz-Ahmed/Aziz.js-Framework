@@ -291,6 +291,85 @@ test('font preloads are cached instead of re-scanning the project per request', 
     }
 });
 
+test('the ISR cache can be moved to a shared volume (AZIZ_CACHE_DIR)', async () => {
+    const dir = scaffold(APP);
+    const shared = path.join(dir, 'shared-cache');
+    const previous = process.env.AZIZ_CACHE_DIR;
+    process.env.AZIZ_CACHE_DIR = shared;
+    try {
+        const staticStore = require(path.join(TEMPLATE, 'scripts', 'lib', 'static-store.js'));
+        await staticStore.writeISR(dir, '/hello', { html: '<h1>isr</h1>', revalidate: 30 });
+
+        assert.ok(fs.existsSync(path.join(shared, 'isr')),
+            'the ISR entry must land in the shared cache root');
+        assert.ok(!fs.existsSync(path.join(dir, '.aziz', 'cache')),
+            'nothing may be written to the project-local ISR cache');
+
+        const read = await staticStore.readISR(dir, '/hello');
+        assert.match(read.html, /isr/);
+
+        // Prerendered pages are build output: they stay next to the source
+        // so they can ship inside the image.
+        await staticStore.writeStatic(dir, '/hello', '<h1>static</h1>', { revalidate: 60 });
+        assert.ok(fs.existsSync(path.join(dir, '.aziz', 'static', 'hello', 'index.html')),
+            'prerendered pages stay in the project');
+    } finally {
+        if (previous === undefined) delete process.env.AZIZ_CACHE_DIR;
+        else process.env.AZIZ_CACHE_DIR = previous;
+        fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    }
+});
+
+test('ISR regeneration is locked so one instance regenerates a stale page', async () => {
+    const dir = scaffold(APP);
+    try {
+        const staticStore = require(path.join(TEMPLATE, 'scripts', 'lib', 'static-store.js'));
+
+        const release = staticStore.acquireLock(dir, '/blog/post');
+        assert.ok(release, 'the first instance must get the lock');
+        assert.equal(staticStore.acquireLock(dir, '/blog/post'), null,
+            'a second instance must not get the lock');
+
+        release();
+        const again = staticStore.acquireLock(dir, '/blog/post');
+        assert.ok(again, 'the lock must be released again');
+        again();
+    } finally {
+        fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    }
+});
+
+test('the cache is pluggable: a custom adapter replaces the file store', async () => {
+    const dir = scaffold(APP);
+    const staticStore = require(path.join(TEMPLATE, 'scripts', 'lib', 'static-store.js'));
+    const seen = [];
+
+    staticStore.setAdapter({
+        async readStatic(root, pathname) {
+            seen.push(['readStatic', pathname]);
+            return { html: '<h1>from adapter</h1>', meta: { status: 200 } };
+        },
+        async writeStatic() { seen.push(['writeStatic']); },
+        async readISR(root, pathname) {
+            seen.push(['readISR', pathname]);
+            return { html: '<h1>isr</h1>', at: Date.now(), revalidate: 30 };
+        },
+        async writeISR() { seen.push(['writeISR']); },
+    });
+
+    try {
+        const staticEntry = await staticStore.readStatic(dir, '/x');
+        assert.match(staticEntry.html, /from adapter/);
+        const isrEntry = await staticStore.readISR(dir, '/x');
+        assert.match(isrEntry.html, /isr/);
+        assert.ok(seen.some(s => s[0] === 'readStatic'));
+        assert.ok(seen.some(s => s[0] === 'readISR'));
+    } finally {
+        staticStore.setAdapter(null);
+        fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    }
+});
+
 test('a crafted /_compiled/ path cannot escape the compiled directory', async () => {
     const dir = scaffold(APP);
     try {

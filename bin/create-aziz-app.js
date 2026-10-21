@@ -108,6 +108,17 @@ function updatePackageJson(targetDir, projectName) {
     const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
     pkg.name = projectName;
     fs.writeFileSync(pkgPath, JSON.stringify(pkg, null, 2) + '\n');
+
+    // The lockfile carries the template's name. A mismatch makes `npm ci`
+    // complain on some npm versions, so it is renamed too.
+    const lockPath = path.join(targetDir, 'package-lock.json');
+    if (!fs.existsSync(lockPath)) return;
+    try {
+        const lock = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+        lock.name = projectName;
+        if (lock.packages && lock.packages['']) lock.packages[''].name = projectName;
+        fs.writeFileSync(lockPath, JSON.stringify(lock, null, 2) + '\n');
+    } catch { /* a broken lockfile is npm's problem to report */ }
 }
 
 function updateDevServerPort(targetDir, port) {

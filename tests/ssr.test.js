@@ -237,14 +237,14 @@ test('i18n: detection, redirect and as-needed prefixes', () => {
     assert.equal(pageRouter.localeRedirect('/about', asNeeded, 'fr'), '/fr/about');
 });
 
-test('static store writes, reads and expires ISR entries', () => {
+test('static store writes, reads and expires ISR entries', async () => {
     const root = makeApp({});
-    staticStore.writeStatic(root, '/hello', '<h1>static</h1>', { revalidate: 60 });
-    assert.match(staticStore.readStatic(root, '/hello').html, /static/);
-    assert.equal(staticStore.readStatic(root, '/missing'), null);
+    await staticStore.writeStatic(root, '/hello', '<h1>static</h1>', { revalidate: 60 });
+    assert.match((await staticStore.readStatic(root, '/hello')).html, /static/);
+    assert.equal(await staticStore.readStatic(root, '/missing'), null);
 
-    staticStore.writeISR(root, '/hello', { html: '<h1>isr</h1>', revalidate: 5 });
-    const isr = staticStore.readISR(root, '/hello');
+    await staticStore.writeISR(root, '/hello', { html: '<h1>isr</h1>', revalidate: 5 });
+    const isr = await staticStore.readISR(root, '/hello');
     assert.match(isr.html, /isr/);
     assert.equal(isr.revalidate, 5);
     assert.ok(isr.at > 0);

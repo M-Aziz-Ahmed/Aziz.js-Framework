@@ -122,6 +122,98 @@ compiler. Use it as a readiness probe.
 with code 0. Systemd, Docker and Kubernetes all send `SIGTERM` before
 killing, so a rolling deploy will not cut responses in half.
 
+## Running several instances
+
+A single process is fine for a small app. For more, run several instances
+behind a proxy — they are stateless apart from the cache.
+
+### Share the ISR cache
+
+The ISR cache is the only runtime state. Point every instance at the same
+directory (a mounted volume, an NFS/EFS share, a Kubernetes PVC):
+
+```bash
+AZIZ_CACHE_DIR=/data/aziz node scripts/dev-server.js --production
+```
+
+- **Writes are atomic** (temp file + rename), so an instance never reads a
+  half-written entry.
+- **Regeneration is locked** with a lock file, so one instance re-renders a
+  stale page while the others keep serving the stale copy. A lock left behind
+  by a crashed process is broken after 60 seconds.
+- The prerendered pages from `npm run build` are *not* shared: they are
+  identical on every instance, so they ship with the image.
+
+### Or plug in your own cache
+
+For Redis, Memcached or a KV store, set `AZIZ_CACHE_ADAPTER` to a module:
+
+```js
+// redis-cache.js
+module.exports = {
+    create({ isrCacheRoot }) {
+        return {
+            async readStatic(root, pathname) { /* … */ },
+            async writeStatic(root, pathname, html, meta) { /* … */ },
+            async readISR(root, pathname) { /* … */ },
+            async writeISR(root, pathname, entry) { /* … */ },
+        };
+    },
+};
+```
+
+```bash
+AZIZ_CACHE_ADAPTER=/app/redis-cache.js node scripts/dev-server.js --production
+```
+
+The adapter's methods may be async. This seam is how you get a shared cache
+without the framework taking a dependency on a client library.
+
+## Docker
+
+Every generated app ships with a `Dockerfile` and a `.dockerignore`:
+
+```bash
+docker build -t my-app .
+docker run -p 3000:3000 my-app
+```
+
+The image is built in three stages:
+
+1. **deps** — production dependencies only (`npm ci --omit=dev`).
+2. **build** — `npm run build`, so the precompiled modules and the
+   prerendered pages are baked in. The dev dependencies are then deleted.
+3. **runtime** — the server, running as a non-root user, with **no
+   `@babel/standalone` inside the image**.
+
+The image sets `AZIZ_CACHE_DIR=/data/aziz` and declares `/data` as a volume,
+so the ISR cache survives restarts. Mount the same volume on every replica to
+share it. `HEALTHCHECK` polls `/_aziz/health`, so `docker ps` and orchestrators
+know when the app is actually up.
+
+## Continuous integration
+
+A minimal pipeline for a generated app:
+
+```yaml
+name: CI
+on: [push, pull_request]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '22', cache: npm }
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+      - run: docker build -t my-app .
+```
+
+`npm run build` is the important step: it fails the build when a dependency is
+missing, when a page cannot be prerendered, or when the JSX does not compile.
+
 ## Locally testing production
 
 ```bash

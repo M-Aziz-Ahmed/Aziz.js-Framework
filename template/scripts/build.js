@@ -207,7 +207,7 @@ async function main() {
                 failures.push(`${job.pathname} (HTTP ${res.status})`);
                 continue;
             }
-            staticStore.writeStatic(ROOT, job.pathname, html, {
+            await staticStore.writeStatic(ROOT, job.pathname, html, {
                 revalidate: job.revalidate,
                 dynamic: job.dynamic,
                 status: res.status,

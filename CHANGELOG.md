@@ -1,5 +1,18 @@
 # Changelog
 
+## [3.4.0]
+
+### Added
+- **Shared ISR cache for multi-instance deployments.** `AZIZ_CACHE_DIR` moves the ISR cache to a shared volume, so several instances behind a proxy regenerate a stale page **once** instead of once per instance. Cache writes are atomic (temp file + rename), so an instance never reads a half-written entry, and regeneration takes a lock file — one instance re-renders, the rest keep serving the stale copy. A lock left by a crashed process is broken after 60 s. The prerendered pages stay with the build: they are identical everywhere, so they ship in the image.
+- **Pluggable cache adapter.** `AZIZ_CACHE_ADAPTER=/path/to/module.js` replaces the file cache with your own (Redis, Memcached, KV). The module exports `create(ctx)` → `{ readStatic, writeStatic, readISR, writeISR }`; the methods may be async. This is how you get a shared cache without the framework taking a dependency on a client library.
+- **`Dockerfile` + `.dockerignore` in every generated app.** A three-stage image: production dependencies, a build stage that precompiles the app and prerenders the pages, and a runtime stage that runs as a non-root user **without `@babel/standalone` in the image**. `AZIZ_CACHE_DIR=/data/aziz` is set and `/data` is a volume, and `HEALTHCHECK` polls `/_aziz/health`.
+- **CI pipeline** (`.github/workflows/ci.yml`): tests on Node 18/20/22/24, a build + smoke test that scaffolds an app, installs it, builds it and queries the production server, a `npm pack` check, and a job that builds and runs the Docker image.
+
+### Changed
+- The cache layer is now async (`readStatic`/`writeStatic`/`readISR`/`writeISR`) so an adapter can be async.
+- Prerendered page HTML is kept in memory (invalidated by the manifest's generation timestamp) instead of being re-read from disk on every request.
+- The scaffolder renames `package-lock.json` along with `package.json`, so `npm ci` never sees a mismatched lockfile.
+
 ## [3.3.0]
 
 ### Added

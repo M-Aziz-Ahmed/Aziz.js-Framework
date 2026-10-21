@@ -100,6 +100,8 @@ SSR + hydration · file-based routing · nested & dynamic (`[slug]`) and catch-a
 | Edge runtime | ⚠️ API routes with `runtime = 'edge'` (capability boundary, not an isolate) |
 | i18n routing | ✅ locale prefixes, `[locale]` routes, cookie/`Accept-Language` |
 | Production hardening | ✅ precompiled build (no Babel at runtime), brotli/gzip, hashed immutable assets, health endpoint, graceful shutdown, security headers, dependency preflight |
+| Multi-instance deploy | ✅ shared ISR cache (`AZIZ_CACHE_DIR`) with atomic writes + regeneration locks, or a pluggable cache adapter (`AZIZ_CACHE_ADAPTER`) |
+| Containers & CI | ✅ `Dockerfile` (3-stage, non-root, no compiler in the image) + GitHub Actions pipeline in the framework repo |
 | Ecosystem & docs | ⚠️ intentionally small |
 | Battle-tested at scale | ❌ one maintainer; security policy is now published |
 

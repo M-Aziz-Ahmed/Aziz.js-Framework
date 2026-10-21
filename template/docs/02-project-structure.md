@@ -6,6 +6,8 @@ Every folder in a generated Aziz.js app, and what goes in it.
 my-app/
 |-- index.html              document shell (SSR injects #root + <head>)
 |-- package.json            name, scripts, dependencies
+|-- Dockerfile              production image (deps → build → runtime)
+|-- .dockerignore           keeps the image context small
 |-- i18n.js                 optional locale routing config
 |-- middleware.js           optional auth/redirect hook
 |-- .aziz/                  build output (gitignored): static HTML + ISR cache

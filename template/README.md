@@ -98,6 +98,17 @@ In production the server also:
 - answers `GET /_aziz/health` with uptime, memory and build info
 - shuts down gracefully on `SIGTERM`, finishing in-flight requests
 
+A `Dockerfile` and `.dockerignore` ship with the app:
+
+```bash
+docker build -t my-app .
+docker run -p 3000:3000 my-app
+```
+
+To run several instances, point them at one shared ISR cache with
+`AZIZ_CACHE_DIR=/data/aziz` — or plug in your own cache with
+`AZIZ_CACHE_ADAPTER`.
+
 See [Production & Deployment](./docs/12-production-and-deployment.md).
 
 ---

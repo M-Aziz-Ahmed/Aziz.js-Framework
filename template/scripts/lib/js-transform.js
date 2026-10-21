@@ -20,10 +20,23 @@ let Babel = null;
 let babelTried = false;
 
 function babelCandidates() {
-    return [
+    const candidates = [
         path.join(__dirname, '..', '..', 'node_modules', '@babel', 'standalone'),
         path.join(process.cwd(), 'node_modules', '@babel', 'standalone'),
     ];
+
+    // The framework repo itself: template/ has no node_modules of its own
+    // in CI, so the repo root is the fallback — but only when that really
+    // is the framework repo, never for a user's app.
+    const repoRoot = path.join(__dirname, '..', '..', '..');
+    try {
+        const pkg = JSON.parse(fs.readFileSync(path.join(repoRoot, 'package.json'), 'utf8'));
+        if (pkg.name === 'create-aziz-app') {
+            candidates.push(path.join(repoRoot, 'node_modules', '@babel', 'standalone'));
+        }
+    } catch { /* not the framework repo */ }
+
+    return candidates;
 }
 
 function loadBabel() {

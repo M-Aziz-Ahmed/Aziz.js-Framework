@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test · Node ${{ matrix.node }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['18', '20', '22', '24']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm test
+
+  build:
+    name: Build & smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+
+      - name: Build the template
+        run: npm run build
+
+      - name: Scaffold, install and build a generated app
+        run: |
+          node bin/create-aziz-app.js "$RUNNER_TEMP/smoke-app" -y --no-docs
+          cd "$RUNNER_TEMP/smoke-app"
+          npm install --no-audit --no-fund
+          npm run build
+
+      - name: The production server must answer
+        run: |
+          cd "$RUNNER_TEMP/smoke-app"
+          PORT=3999 node scripts/dev-server.js --production &
+          for i in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:3999/_aziz/health && break
+            sleep 1
+          done
+          curl -fsS -o /dev/null -w 'home: %{http_code}\n' http://127.0.0.1:3999/
+          curl -fsS http://127.0.0.1:3999/_framework/routes.json
+
+      - name: Pack
+        run: npm pack --dry-run
+
+  docker:
+    name: Docker image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Build the image from a generated app
+        run: |
+          node bin/create-aziz-app.js "$RUNNER_TEMP/docker-app" -y --no-docs
+          cd "$RUNNER_TEMP/docker-app"
+          docker build -t aziz-smoke .
+      - name: Run it and check the health endpoint
+        run: |
+          docker run -d --name aziz-smoke -p 3999:3000 aziz-smoke
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:3999/_aziz/health; then break; fi
+            sleep 1
+          done
+          curl -fsS -o /dev/null -w 'home: %{http_code}\n' http://127.0.0.1:3999/
+          docker logs aziz-smoke
