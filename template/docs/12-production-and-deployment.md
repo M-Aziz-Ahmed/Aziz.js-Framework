@@ -1,9 +1,13 @@
 # 12 · Production & Deployment
 
-Aziz.js doesn't "bundle" to a huge build — it serves your source, compiles JSX on demand, and serves `/_modules/*` straight from `node_modules`. There's nothing to compile to a `dist/` directory.
+Aziz.js doesn't "bundle" to a huge build — there is no `dist/` directory and no
+webpack-style artifact graph. It serves your source, compiles JSX when it has
+to, and serves `/_modules/*` straight from `node_modules`.
 
-`npm run build` **does** precompile your modules, though: that is what keeps the
-production server fast. See [Precompiled build output](#precompiled-build-output).
+`npm run build` precompiles your modules into `.aziz/compiled` and prerenders
+the static pages. That is what keeps the production server fast: the compiler
+is never needed at request time. See
+[Precompiled build output](#precompiled-build-output).
 
 ## npm scripts
 

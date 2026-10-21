@@ -82,7 +82,7 @@ Bare `mongoose` in API routes is the usual `require('mongoose')` (no `/_modules`
 ## Loading strategy
 
 - `/_modules/*` is **on-the-fly**. The dev server reads the module file, runs the same transform pipeline (JSX transform only affects files inside your app tree; modules usually don't contain JSX), and serves it as ES module text.
-- Transforms for your own files (`app/`, `components/`) are **mtime-cached** to make hot reload snappy.
+- Transforms for your own files (`app/`, `components/`) are **mtime-cached** to make hot reload snappy. In production they are precompiled at build time and served as content-hashed artifacts.
 - Framework internals (`/_framework/*`) are served as-is (no JSX rewrite).
 
 ## Tips

@@ -415,7 +415,9 @@ Deep dive: [Server Rendering, SSG, ISR, Streaming, Images & i18n](./template/doc
 
 ## Security model
 
-There is **no bundler**, so any module a page can import is served from disk. The dev server enforces the boundary.
+There is **no bundler**, so any module a page can import is served from disk
+(in production: from the precompiled, hashed artifacts in `.aziz/compiled`).
+The dev server enforces the boundary.
 
 **Never served** (404 in dev *and* production):
 
@@ -458,7 +460,9 @@ There is **no bundler**, so any module a page can import is served from disk. Th
 4. **Image resizing needs `sharp`.** It is an optional dependency installed by
    default; if unavailable, `/_aziz/image` serves the original bytes.
 5. **Edge runtime is a `vm` capability boundary**, not a V8 isolate.
-6. **ISR is single-instance.** `.aziz/cache/isr` is local to the server.
+6. **ISR needs a shared cache for multiple instances.** The cache is local by
+   default; point every instance at one volume with `AZIZ_CACHE_DIR`, or plug
+   in your own store with `AZIZ_CACHE_ADAPTER`.
 7. **Streaming boundaries are DOM swaps** and do not preserve listeners inside
    the swapped subtree.
 8. **One maintainer.** A security policy exists (`SECURITY.md`), but the project

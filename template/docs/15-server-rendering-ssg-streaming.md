@@ -112,7 +112,9 @@ Notes:
 - ISR requires `npm start` / `--production`. The dev server never serves stale
   HTML.
 - In-memory locking prevents duplicate background renders per path.
-- There is no distributed cache: `.aziz/` is local to the server instance.
+- There is no distributed cache out of the box: the ISR cache is local to the
+  server instance unless you point `AZIZ_CACHE_DIR` at a shared volume or plug
+  in your own store with `AZIZ_CACHE_ADAPTER`.
 
 ## Streaming and Suspense
 
