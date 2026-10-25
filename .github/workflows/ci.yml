@@ -25,7 +25,18 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
       - run: npm ci
-      - run: npm test
+      - name: Test
+        run: |
+          set +e
+          npm test > test-output.log 2>&1
+          status=$?
+          cat test-output.log
+          if [ "$status" -ne 0 ]; then
+            grep -E 'not ok|✖' test-output.log | head -40 | while IFS= read -r line; do
+              echo "::error::$line"
+            done
+            exit "$status"
+          fi
 
   build:
     name: Build & smoke test
