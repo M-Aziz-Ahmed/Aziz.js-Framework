@@ -10,9 +10,11 @@ To publish it:
 
 # Syed Muhammad Aziz Ahmed
 
+<img align="right" width="150" src="https://azizahmed.vercel.app/logo.jpg" alt="Syed Muhammad Aziz Ahmed">
+
 **Creator and maintainer of [Aziz.js Framework](https://github.com/M-Aziz-Ahmed/Aziz.js-Framework)** — a Next.js-inspired React framework with file-based routing, SSR, ISR, API routes, and zero runtime dependencies.
 
-I build web applications and developer tools. Aziz.js is my open-source framework for shipping server-rendered React apps without a bundler.
+I build web applications and developer tools. Aziz.js is my open-source framework for shipping server-rendered React apps without a bundler. See my work at [azizahmed.vercel.app](https://azizahmed.vercel.app/).
 
 ## Featured project
 
@@ -50,6 +52,7 @@ npm run dev
 
 ## Connect
 
+- Portfolio: [azizahmed.vercel.app](https://azizahmed.vercel.app/)
 - GitHub: [@M-Aziz-Ahmed](https://github.com/M-Aziz-Ahmed)
 - npm: [azizahmed_dev](https://www.npmjs.com/~azizahmed_dev)
 - Email: [azizahmed10088@gmail.com](mailto:azizahmed10088@gmail.com)

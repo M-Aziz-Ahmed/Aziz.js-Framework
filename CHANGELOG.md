@@ -3,7 +3,7 @@
 ## [3.5.2]
 
 ### Added
-- **Project metadata and attribution.** `package.json` now names Syed Muhammad Aziz Ahmed as author and links the repository, issue tracker, homepage and MIT license; `AUTHORS.md` and the README/template README credit the creator. A static project site under `site/` (with JSON-LD, `robots.txt` and a sitemap) and a GitHub Pages workflow make the project and its author discoverable.
+- **Project metadata and attribution.** `package.json` now names Syed Muhammad Aziz Ahmed as author and links the repository, issue tracker, portfolio, homepage and MIT license; `AUTHORS.md` and the README/template README credit the creator. A static project site under `site/` uses his portrait in the `Person` schema and Open Graph tags, with JSON-LD, `robots.txt`, a sitemap and a GitHub Pages workflow to make the project and its author discoverable.
 - **Next.js-style React imports.** `import React, { useState } from 'react'` now resolves to `/_framework/react.js`, backed by the framework's own hooks, instead of 404ing on `/_modules/react`. `react/jsx-runtime` and `react/jsx-dev-runtime` map to the same shim.
 
 ### Fixed

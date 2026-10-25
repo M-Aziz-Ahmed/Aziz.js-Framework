@@ -1,6 +1,6 @@
 # ⚡ Aziz.js
 
-**Aziz.js Framework** is a Next.js-inspired React framework by **[Syed Muhammad Aziz Ahmed](https://github.com/M-Aziz-Ahmed)**, with zero runtime dependencies. File-based routing, TypeScript, global hooks, SSR + hydration, SSG/ISR, streaming Suspense, server-side API routes and middleware — served as ~20 KB gzipped of ES modules, no bundler.
+**Aziz.js Framework** is a Next.js-inspired React framework by **[Syed Muhammad Aziz Ahmed](https://azizahmed.vercel.app/)**, with zero runtime dependencies. File-based routing, TypeScript, global hooks, SSR + hydration, SSG/ISR, streaming Suspense, server-side API routes and middleware — served as ~20 KB gzipped of ES modules, no bundler.
 
 ```bash
 npx create-aziz-app my-app
@@ -11,7 +11,7 @@ npm run dev
 
 > **`npm install` is not optional.** JSX is compiled by `@babel/standalone`. Until it is installed, every page fails to load and you get the built-in 404. The dev server prints a banner telling you so.
 
-**Project:** [GitHub](https://github.com/M-Aziz-Ahmed/Aziz.js-Framework) · [npm](https://www.npmjs.com/package/create-aziz-app) · [Issues](https://github.com/M-Aziz-Ahmed/Aziz.js-Framework/issues) · **Author:** [Syed Muhammad Aziz Ahmed](https://github.com/M-Aziz-Ahmed) · **License:** [MIT](./LICENSE)
+**Project:** [GitHub](https://github.com/M-Aziz-Ahmed/Aziz.js-Framework) · [npm](https://www.npmjs.com/package/create-aziz-app) · [Issues](https://github.com/M-Aziz-Ahmed/Aziz.js-Framework/issues) · **Author:** [Syed Muhammad Aziz Ahmed](https://azizahmed.vercel.app/) · **License:** [MIT](./LICENSE)
 
 ---
 
@@ -30,7 +30,7 @@ npm run dev
 
 ## About this project
 
-Aziz.js Framework (npm: [`create-aziz-app`](https://www.npmjs.com/package/create-aziz-app)) is an open-source, Next.js-inspired React framework created and maintained by **Syed Muhammad Aziz Ahmed** ([@M-Aziz-Ahmed](https://github.com/M-Aziz-Ahmed)). It provides file-based routing, server rendering, API routes, middleware and a small ES-module runtime without a bundler. The source lives at [M-Aziz-Ahmed/Aziz.js-Framework](https://github.com/M-Aziz-Ahmed/Aziz.js-Framework).
+Aziz.js Framework (npm: [`create-aziz-app`](https://www.npmjs.com/package/create-aziz-app)) is an open-source, Next.js-inspired React framework created and maintained by **Syed Muhammad Aziz Ahmed** ([portfolio](https://azizahmed.vercel.app/), [@M-Aziz-Ahmed](https://github.com/M-Aziz-Ahmed)). It provides file-based routing, server rendering, API routes, middleware and a small ES-module runtime without a bundler. The source lives at [M-Aziz-Ahmed/Aziz.js-Framework](https://github.com/M-Aziz-Ahmed/Aziz.js-Framework).
 
 ---
 
@@ -567,6 +567,6 @@ Node's Windows directory watcher can abort the process with `Assertion failed: !
 
 ---
 
-**Aziz.js Framework** is created and maintained by **[Syed Muhammad Aziz Ahmed](https://github.com/M-Aziz-Ahmed)** ([npm](https://www.npmjs.com/~azizahmed_dev) · [email](mailto:azizahmed10088@gmail.com)).
+**Aziz.js Framework** is created and maintained by **[Syed Muhammad Aziz Ahmed](https://azizahmed.vercel.app/)** ([GitHub](https://github.com/M-Aziz-Ahmed) · [npm](https://www.npmjs.com/~azizahmed_dev) · [email](mailto:azizahmed10088@gmail.com)).
 
 **License:** [MIT](./LICENSE) · **Security:** [SECURITY.md](./SECURITY.md) · **Authors:** [AUTHORS.md](./AUTHORS.md)

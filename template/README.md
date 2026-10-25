@@ -4,7 +4,7 @@ A lightweight Next.js-shaped framework with file-based routing, React hooks,
 SSR + hydration, SSG/ISR, streaming Suspense, and ES module imports — **zero
 runtime dependencies, instant startup**.
 
-Created by [Syed Muhammad Aziz Ahmed](https://github.com/M-Aziz-Ahmed).
+Created by [Syed Muhammad Aziz Ahmed](https://azizahmed.vercel.app/).
 Aziz.js is open source on [GitHub](https://github.com/M-Aziz-Ahmed/Aziz.js-Framework)
 and [npm](https://www.npmjs.com/package/create-aziz-app).
 
@@ -534,4 +534,4 @@ dotfiles and `node_modules/` are not served as browser modules.
 
 ## License
 
-MIT © 2026 [Syed Muhammad Aziz Ahmed](https://github.com/M-Aziz-Ahmed)
+MIT © 2026 [Syed Muhammad Aziz Ahmed](https://azizahmed.vercel.app/)

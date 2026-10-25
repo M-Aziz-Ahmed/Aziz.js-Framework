@@ -16,5 +16,7 @@ npm and jsDelivr link to it, then publish a new npm version.
 
 - `index.html` — landing page, Open Graph tags, JSON-LD (`SoftwareApplication` + `Person`)
 - `styles.css` — site styles
+- `assets/syed-muhammad-aziz-ahmed.jpg` — author portrait for JSON-LD and Open Graph (1200×1200)
+- `assets/syed-muhammad-aziz-ahmed-600.jpg` — smaller portrait for the author card
 - `robots.txt`, `sitemap.xml` — crawler hints for the canonical Pages URL
 - `favicon.svg` — site icon
