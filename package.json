@@ -1,6 +1,6 @@
 {
   "name": "create-aziz-app",
-  "version": "3.5.3",
+  "version": "3.5.4",
   "description": "Create Aziz.js apps — a Next.js-inspired React framework with file-based routing, SSR/ISR, API routes, and zero runtime dependencies",
   "keywords": [
     "aziz.js",

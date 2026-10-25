@@ -6,6 +6,7 @@ const os = require('os');
 const path = require('path');
 
 const { resolveNodeModule } = require('../template/scripts/lib/module-resolver');
+const { linkBabel } = require('./helpers/babel.js');
 
 const REPO = path.join(__dirname, '..');
 const TEMPLATE = path.join(REPO, 'template');
@@ -49,13 +50,7 @@ function scaffold(files) {
         fs.cpSync(path.join(TEMPLATE, sub), path.join(dir, sub), { recursive: true });
     }
     fs.copyFileSync(path.join(TEMPLATE, 'index.html'), path.join(dir, 'index.html'));
-    const babelPkg = path.join(TEMPLATE, 'node_modules', '@babel', 'standalone');
-    if (fs.existsSync(babelPkg)) {
-        fs.mkdirSync(path.join(dir, 'node_modules', '@babel'), { recursive: true });
-        try {
-            fs.symlinkSync(babelPkg, path.join(dir, 'node_modules', '@babel', 'standalone'), 'junction');
-        } catch { /* symlink may be unavailable */ }
-    }
+    linkBabel(dir);
     for (const [rel, content] of Object.entries(files)) {
         const f = path.join(dir, rel);
         fs.mkdirSync(path.dirname(f), { recursive: true });

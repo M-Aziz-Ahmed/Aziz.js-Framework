@@ -7,7 +7,10 @@ file.
 
 What the framework does **not** do is decide who your users are. Authentication
 and authorization are application problems — see
-[Authentication](./11-authentication.md).
+[Authentication](./11-authentication.md). This matches Next.js's trust model:
+server code runs with Node privileges, anything the browser can import is
+public, and the app owns authentication. Aziz.js adds CSRF validation, rate
+limiting, same-origin CORS and security headers on top.
 
 ## The short version
 

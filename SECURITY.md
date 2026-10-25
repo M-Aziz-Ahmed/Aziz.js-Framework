@@ -34,6 +34,12 @@ sooner. We will credit reporters unless asked otherwise.
 
 ## Scope
 
+This is the same trust model as Next.js: server code is trusted and runs with
+the host's privileges, anything sent to the browser is public, and
+authentication/authorization belong to the application. Scanners often flag
+these boundaries as findings, but they are intended behaviour, not
+vulnerabilities.
+
 Aziz.js intentionally runs user modules with Node privileges. The following
 are **not** vulnerabilities by themselves:
 

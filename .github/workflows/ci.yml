@@ -42,9 +42,10 @@ jobs:
         run: npm run build
 
       - name: Scaffold, install and build a generated app
+        working-directory: ${{ runner.temp }}
         run: |
-          node bin/create-aziz-app.js "$RUNNER_TEMP/smoke-app" -y --no-docs
-          cd "$RUNNER_TEMP/smoke-app"
+          node "$GITHUB_WORKSPACE/bin/create-aziz-app.js" smoke-app -y --no-docs
+          cd smoke-app
           npm install --no-audit --no-fund
           npm run build
 
@@ -73,9 +74,10 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Build the image from a generated app
+        working-directory: ${{ runner.temp }}
         run: |
-          node bin/create-aziz-app.js "$RUNNER_TEMP/docker-app" -y --no-docs
-          cd "$RUNNER_TEMP/docker-app"
+          node "$GITHUB_WORKSPACE/bin/create-aziz-app.js" docker-app -y --no-docs
+          cd docker-app
           docker build -t aziz-smoke .
       - name: Run it and check the health endpoint
         run: |

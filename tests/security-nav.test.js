@@ -7,6 +7,7 @@ const path = require('path');
 
 const { installDOM } = require('./helpers/dom.js');
 const { loadFramework } = require('./helpers/esm.js');
+const { linkBabel } = require('./helpers/babel.js');
 
 const REPO = path.join(__dirname, '..');
 const TEMPLATE = path.join(REPO, 'template');
@@ -34,13 +35,7 @@ function scaffold(files) {
         fs.cpSync(path.join(TEMPLATE, sub), path.join(dir, sub), { recursive: true });
     }
     fs.copyFileSync(path.join(TEMPLATE, 'index.html'), path.join(dir, 'index.html'));
-    // @babel/standalone is a devDependency; link the package itself (not its
-    // parent directory) so the dev server can compile JSX like a real install.
-    const babelPkg = path.join(TEMPLATE, 'node_modules', '@babel', 'standalone');
-    if (fs.existsSync(babelPkg)) {
-        fs.mkdirSync(path.join(dir, 'node_modules', '@babel'), { recursive: true });
-        fs.symlinkSync(babelPkg, path.join(dir, 'node_modules', '@babel', 'standalone'), 'junction');
-    }
+    linkBabel(dir);
     for (const [rel, content] of Object.entries(files)) {
         const f = path.join(dir, rel);
         fs.mkdirSync(path.dirname(f), { recursive: true });
