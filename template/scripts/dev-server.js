@@ -1174,12 +1174,14 @@ function notifyClients() {
 
 // ─── File Watcher (development only) ─────────────────────────
 //
-// Native recursive fs.watch is used on Linux and macOS. On Windows,
-// Node's directory watcher can abort the whole process with
-// "Assertion failed: !_wcsnicmp(filename, dir, dirlen)"
-// (src\win\fs-event.c) the moment a watched file is edited. That is a
-// native assertion try/catch cannot intercept, so Windows gets a small
-// mtime poller instead. AZIZ_WATCH_POLL=1 forces polling everywhere.
+// Native recursive fs.watch is used on Linux and macOS where the running
+// Node version supports it. On Windows, Node's directory watcher can abort
+// the whole process with "Assertion failed: !_wcsnicmp(filename, dir,
+// dirlen)" (src\win\fs-event.c) the moment a watched file is edited. That
+// is a native assertion try/catch cannot intercept, so Windows gets a small
+// mtime poller instead. The same poller takes over when recursive watching
+// is unavailable (Linux before Node 20.13). AZIZ_WATCH_POLL=1 forces
+// polling everywhere.
 
 const watchDirs = ['app', 'api', 'components', 'lib', 'models', 'styles', '_framework'];
 const SERVER_CODE_DIRS = new Set(['api', 'lib', 'models']);
@@ -1293,6 +1295,7 @@ if (!PRODUCTION && process.env.AZIZ_NO_WATCH !== '1') {
     if (poll) {
         startPollingWatcher(dirs);
     } else {
+        const pollDirs = [];
         dirs.forEach(dir => {
             const full = path.join(ROOT, dir);
             try {
@@ -1302,8 +1305,13 @@ if (!PRODUCTION && process.env.AZIZ_NO_WATCH !== '1') {
                 });
             } catch (err) {
                 console.warn(`   ⚠️ Could not watch ${dir}/: ${err.message}`);
+                pollDirs.push(dir);
             }
         });
+        if (pollDirs.length > 0) {
+            console.warn(`   👀 Polling instead: ${pollDirs.join(', ')}`);
+            startPollingWatcher(pollDirs);
+        }
     }
 
     for (const name of ['i18n.js', 'i18n.cjs', 'i18n.mjs', 'i18n.json']) {
