@@ -1,25 +1,43 @@
 {
   "name": "create-aziz-app",
-  "version": "3.4.0",
-  "description": "Create Aziz.js apps — lightweight Next.js clone with file-based routing, React hooks, and API routes",
+  "version": "3.5.2",
+  "description": "Create Aziz.js apps — a Next.js-inspired React framework with file-based routing, SSR/ISR, API routes, and zero runtime dependencies",
   "keywords": [
     "aziz.js",
+    "azizjs",
     "nextjs",
+    "nextjs-alternative",
+    "react",
     "framework",
-    "cli",
-    "create-app",
     "file-based-routing",
-    "react-hooks",
+    "ssr",
+    "isr",
     "api-routes",
-    "live-reload",
-    "lightweight"
+    "typescript",
+    "no-bundler",
+    "zero-dependencies",
+    "create-app",
+    "cli"
   ],
   "license": "MIT",
-  "author": "Syed Muhammad Aziz Ahmed",
+  "author": {
+    "name": "Syed Muhammad Aziz Ahmed",
+    "email": "azizahmed10088@gmail.com",
+    "url": "https://github.com/M-Aziz-Ahmed"
+  },
+  "homepage": "https://github.com/M-Aziz-Ahmed/Aziz.js-Framework#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/M-Aziz-Ahmed/Aziz.js-Framework.git"
+  },
+  "bugs": {
+    "url": "https://github.com/M-Aziz-Ahmed/Aziz.js-Framework/issues"
+  },
   "type": "commonjs",
   "files": [
     "bin",
     "template",
+    "AUTHORS.md",
     "SECURITY.md"
   ],
   "bin": {
@@ -30,6 +48,7 @@
     "dev": "cd template && node scripts/dev-server.js",
     "build": "cd template && node scripts/build.js",
     "start": "cd template && node scripts/dev-server.js --production",
+    "typecheck": "cd template && node scripts/typecheck.js",
     "test": "node --test \"tests/**/*.test.js\""
   },
   "devDependencies": {

@@ -17,24 +17,32 @@ is never needed at request time. See
     "dev":   "node scripts/dev-server.js",
     "build": "node scripts/build.js",
     "start": "node scripts/dev-server.js --production",
-    "css:build": "node scripts/build-css.js"
+    "css:build": "node scripts/build-css.js",
+    "typecheck": "node scripts/typecheck.js"
   }
 }
 ```
 
+`npm run typecheck` is optional: it runs `tsc --noEmit` when TypeScript is
+installed (`npm i -D typescript`) and says so plainly when it is not. Types are
+always *stripped* at build time; this is the step that verifies them.
+
 **Running with `--production` (or `NODE_ENV=production`) changes behavior:**
 
 - **Precompiled modules** from `.aziz/compiled` are used instead of compiling
-  JSX on demand — the server never loads Babel.
-- **Prerendered HTML** from `.aziz/static` is served first; ISR entries from
-  `.aziz/cache/isr` are served stale-while-revalidate.
+  JSX on demand — the server never loads Babel for your own modules.
+- **Prerendered HTML** from `.aziz/static` is served first; ISR entries are
+  served stale-while-revalidate from the ISR cache (`.aziz/cache/isr` by
+  default, or `AZIZ_CACHE_DIR` when several instances share one cache).
 - **Hashed asset URLs** (`/_compiled/app/page.<hash>.js`) are served with
   `Cache-Control: public, max-age=31536000, immutable`.
 - **Tailwind** is compiled to `styles/tailwind.output.css` during `npm run build`
   when the app links it. No CDN is involved.
 - **Responses are compressed** (brotli or gzip) when the client accepts it.
-- **Security headers** are added: `X-Content-Type-Options`, `X-Frame-Options`,
-  `Referrer-Policy`.
+- **Security headers** are added to every response — `Content-Security-Policy`,
+  `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`,
+  `Permissions-Policy`, `Cross-Origin-Opener-Policy` and, in production,
+  `Strict-Transport-Security`.
 - **Streaming** stays on unless `AZIZ_STREAMING=0` (the build sets this for
   prerendering).
 - **No WebSocket live reload** server/client — the client script becomes an empty no-op.
@@ -61,10 +69,31 @@ What that buys you, measured on a 300-page app:
 | first request after a deploy | 194 ms | 52 ms |
 | median request | 2 ms | 2 ms |
 | resident memory per worker | 80 MB | 62 MB |
-| Babel in the production process | loaded | **never loaded** |
+| Babel in the production process | loaded | **not loaded for your modules** |
 
 The hash is derived from the file's source, so a URL only changes when the
 code changes — that is what makes `immutable` caching safe.
+
+> **One caveat.** Bare npm imports (`import x from 'some-package'`) stay on the
+> `/_modules/<pkg>` path, and that handler compiles on demand — so an app with
+> a bare import *does* load Babel in production. `GET /_aziz/health` reports
+> `"babel": "not loaded"` as a point-in-time snapshot, not a guarantee.
+
+### Source paths redirect to the artifact
+
+Because there is no bundler, the browser imports page modules over HTTP
+(`/app/page.js`). In production that source path **redirects** to the hashed
+artifact instead of being compiled again:
+
+```
+GET /app/page.js
+→ 302 Location: /_compiled/app/page.6088f51994.js
+→ 200 Cache-Control: public, max-age=31536000, immutable
+```
+
+So there is exactly one URL per module, it is cached forever, and a request
+can never pull Babel into a production process. A file that is not in the
+build manifest (added after the build) still compiles on demand.
 
 **Deploy `.aziz/compiled`.** It is build output, so it is git-ignored: either
 run `npm run build` on the host, or build in CI and ship the `.aziz` directory
@@ -287,15 +316,48 @@ in `.aziz/static`, and `npm start` serves it with the runtime behind it.
 ## Security notes
 
 - **Path traversal**: the server confines all static file requests to the project root. Attempts to escape (e.g. `..%2f..%2fpackage.json`) return `403`. Compiled assets are served from an allow-list built at build time, so `/_compiled/…` cannot be used to reach anything else.
-- **API CORS**: preflight `OPTIONS` and responses include permissive CORS headers — tighten if you only serve from one origin.
+- **API CORS**: same-origin only by default — responses carry no `Access-Control-Allow-Origin`, so another origin cannot call your API from a browser. Opt in per origin with `security.cors.origin` in `aziz.config.js` (see [Security](./16-security.md)).
+- **CSRF**: state-changing requests are validated against `Origin`, `Referer` and `Sec-Fetch-Site` before the handler runs. See [Security](./16-security.md).
+- **Rate limiting**: API routes are limited per IP (300 requests/minute by default) and answer `429` with `Retry-After`.
 - **JWT secrets**: never commit `.env`. Don't ship `node_modules` unnecessarily in git.
 - **Dependencies**: `@babel/standalone` is a devDependency and is only needed to *build* now. Your own deps go in `dependencies`.
 - **ETag**: conditional requests use strong-ish ETag based on `mtimeMs`+`size`; fine for this use case.
 
+## Security
+
+The framework ships with the boring defences already on:
+
+| Defence | Default | Change it with |
+|---|---|---|
+| CSRF | `Origin`/`Referer`/`Sec-Fetch-Site` validation on writes | `security.csrf` |
+| CORS | same-origin only | `security.cors.origin` |
+| Rate limit | 300 req/min per IP on `/api/**` | `security.rateLimit` |
+| Security headers | CSP, nosniff, frame options, referrer, permissions | `security.headers` |
+
+Everything is configured from an optional `aziz.config.js` in the project root:
+
+```js
+// aziz.config.js
+module.exports = {
+  security: {
+    csrf: 'strict',                              // 'origin' | 'strict' | false
+    cors: { origin: ['https://app.example.com'] },
+    rateLimit: { windowMs: 60_000, max: 300 },
+    trustProxy: false,                           // true behind a proxy you control
+  },
+};
+```
+
+`strict` mode adds a double-submit token: the server hands the browser a
+`__aziz_csrf` cookie and the client echoes it back in the `X-Aziz-CSRF`
+header. `aziz.config.js` is never served to the browser.
+
+Full guide: [Security](./16-security.md).
+
 ## What "production mode" doesn't do
 
 - No code splitting / tree shaking
-- No minification of JS/CSS (though you can pre-minify and reference extra files)
+- No minification of JS (CSS *is* minified — `npm run build` compiles Tailwind with `--minify`)
 - No `.env` auto-loading (you must set environment variables)
 - No multi-process clustering (run several instances behind a proxy)
 

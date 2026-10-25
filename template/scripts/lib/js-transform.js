@@ -201,7 +201,35 @@ function isRelativeOrAbsolute(spec) {
 function mapSpecifier(spec) {
     if (isRelativeOrAbsolute(spec)) return spec;
     if (spec.startsWith('@/')) return '/' + spec.slice(2);
+    // Next-style React imports resolve to the framework's own hooks.
+    if (spec === 'react' || spec === 'react/jsx-runtime' || spec === 'react/jsx-dev-runtime') {
+        return '/_framework/react.js';
+    }
     return '/_modules/' + spec;
+}
+
+// Collect every static/dynamic import specifier in code position.
+// The build uses this to follow imports into directories that are not
+// part of the default source set (e.g. `shared/` or `ui/`).
+function extractImports(code) {
+    const isCode = codePositions(code);
+    const specs = [];
+    const add = (spec, offset) => { if (isCode[offset]) specs.push(spec); };
+
+    code.replace(/(\bfrom\s*)(['"])([^'"\n]+)\2/g, (m, kw, q, spec, offset) => {
+        add(spec, offset);
+        return m;
+    });
+    code.replace(/(\bimport\s+)(['"])([^'"\n]+)\2/g, (m, kw, q, spec, offset) => {
+        add(spec, offset);
+        return m;
+    });
+    code.replace(/(\bimport\s*\(\s*)(['"])([^'"\n]+)\2(\s*\))/g, (m, pre, q, spec, post, offset) => {
+        add(spec, offset);
+        return m;
+    });
+
+    return specs;
 }
 
 // `mapper` lets the build step point local imports at content-hashed
@@ -284,6 +312,7 @@ module.exports = {
     transformJSX,
     transformCommonJS,
     rewriteImports,
+    extractImports,
     mapSpecifier,
     isRelativeOrAbsolute,
     transformModule,

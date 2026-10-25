@@ -111,10 +111,13 @@ Notes:
 
 - ISR requires `npm start` / `--production`. The dev server never serves stale
   HTML.
-- In-memory locking prevents duplicate background renders per path.
+- Regeneration is guarded twice: an in-memory lock per path, and a
+  cross-process file lock (with stale-lock breaking) so two instances do not
+  render the same path at once.
 - There is no distributed cache out of the box: the ISR cache is local to the
   server instance unless you point `AZIZ_CACHE_DIR` at a shared volume or plug
-  in your own store with `AZIZ_CACHE_ADAPTER`.
+  in your own store with `AZIZ_CACHE_ADAPTER`. Note that `npm run build` clears
+  the ISR cache, so a shared `AZIZ_CACHE_DIR` is emptied by a deploy.
 
 ## Streaming and Suspense
 
@@ -203,7 +206,8 @@ The endpoint:
 
 - resolves files under `public/` or the project root;
 - refuses `server/`, `data/`, dotfiles, `node_modules/` and path traversal;
-- serves an immutable, ETag-based cache in `.aziz/cache/images`;
+- serves an immutable, ETag-based cache in `.aziz/cache/images` — note that
+  this cache is local to the instance and does **not** follow `AZIZ_CACHE_DIR`;
 - converts to WebP/AVIF and resizes when `sharp` is available. Sharp is an
   optional dependency, so a normal `npm install` installs it by default; if the
   platform cannot install it, the endpoint still serves the original bytes.

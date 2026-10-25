@@ -17,7 +17,7 @@ Aziz.js maps files under `app/` to URLs, the same way the Next.js App Router doe
 
 The file must be named **`page.js`** — that's what registers a route.
 `.jsx`, `.ts` and `.tsx` are all accepted; TypeScript types are stripped at
-transform time (there is no type checking).
+transform time, and `npm run typecheck` verifies them separately.
 
 A route is any `page.*` you create — `app/about/`, `app/blog/[slug]/` and
 the rest are examples to add yourself, not files that ship with the template.

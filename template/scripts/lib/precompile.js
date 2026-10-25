@@ -26,18 +26,18 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 
-const { transformJSX, transformCommonJS, rewriteImports, hasBabel } = require('./js-transform');
+const { transformJSX, transformCommonJS, rewriteImports, extractImports, hasBabel } = require('./js-transform');
 
 // Directories whose files the browser may import.
 const SOURCE_DIRS = ['app', 'components', 'lib', 'models'];
 
 // Extensions we compile.
-const CODE_EXT = new Set(['.js', '.jsx', '.ts', '.tsx', '.mjs']);
+const CODE_EXT = new Set(['.js', '.jsx', '.ts', '.tsx', '.mjs', '.mts']);
 
 // Extensions tried when an import omits one.
-const RESOLVE_EXT = ['', '.js', '.jsx', '.ts', '.tsx', '.mjs', '.json'];
+const RESOLVE_EXT = ['', '.js', '.jsx', '.ts', '.tsx', '.mjs', '.mts', '.json'];
 
-const SERVER_MODULE_RE = /\.server\.(m?js|jsx|ts|tsx)$/i;
+const SERVER_MODULE_RE = /\.server\.(?:[cm]?[jt]sx?)$/i;
 const USE_SERVER_RE = /^\s*(?:\/\*[\s\S]*?\*\/\s*)?['"]use server['"]/;
 
 function isFile(p) {
@@ -84,6 +84,52 @@ function collectSources(root) {
         .sort();
 }
 
+// Server-only locations that an import must never pull into the browser
+// bundle, even when a page references them (the dev server blocks these
+// URLs too).
+function isPrivateImport(rel) {
+    const parts = rel.split('/');
+    if (parts.some(part => part.startsWith('.'))) return true;
+    if (parts[0] === 'node_modules' || parts[0] === 'scripts') return true;
+    if (parts[0] === 'server' || parts[0] === 'data' || parts[0] === 'api') return true;
+    if (rel.startsWith('app/api/')) return true;
+    if (rel === 'middleware.js' || rel === 'middleware.ts') return true;
+    if (rel === 'aziz.config.js' || rel === 'aziz.config.mjs') return true;
+    if (SERVER_MODULE_RE.test(rel)) return true;
+    return false;
+}
+
+// The default source set only covers app/components/lib/models. Follow
+// relative imports from those files so a component living anywhere else
+// (shared/, ui/, …) is still compiled for production.
+function followImports(root, seeds) {
+    const seen = new Set(seeds);
+    const queue = [...seeds];
+    const previousRoot = ROOT_CACHE;
+    ROOT_CACHE = root;
+
+    try {
+        while (queue.length > 0) {
+            const rel = queue.shift();
+            let source;
+            try { source = fs.readFileSync(path.join(root, rel), 'utf8'); } catch { continue; }
+
+            for (const spec of extractImports(source)) {
+                const local = resolveLocal(rel, spec);
+                if (!local || seen.has(local)) continue;
+                if (!CODE_EXT.has(path.extname(local).toLowerCase())) continue;
+                if (isPrivateImport(local)) continue;
+                seen.add(local);
+                queue.push(local);
+            }
+        }
+    } finally {
+        ROOT_CACHE = previousRoot;
+    }
+
+    return [...seen].sort();
+}
+
 // Resolve an import specifier to a project-relative path, mirroring
 // the dev server's rules ("@/x" → root-relative, "./x" → relative).
 function resolveLocal(fromRel, spec) {
@@ -99,11 +145,15 @@ function resolveLocal(fromRel, spec) {
     }
 
     const normalized = path.posix.normalize(base).replace(/^\.\//, '');
+    if (!normalized || normalized === '.' || normalized === '..' ||
+        normalized.startsWith('../') || path.posix.isAbsolute(normalized)) {
+        return null;
+    }
     for (const ext of RESOLVE_EXT) {
         const candidate = normalized + ext;
         if (isFile(path.join(ROOT_CACHE, candidate))) return candidate;
     }
-    for (const ext of ['.js', '.jsx', '.ts', '.tsx', '.mjs']) {
+    for (const ext of ['.js', '.jsx', '.ts', '.tsx', '.mjs', '.mts']) {
         const candidate = path.posix.join(normalized, 'index' + ext);
         if (isFile(path.join(ROOT_CACHE, candidate))) return candidate;
     }
@@ -156,7 +206,7 @@ function compileProject(root, options = {}) {
             };
         }
 
-        const rels = collectSources(root);
+        const rels = followImports(root, collectSources(root));
         const entries = rels.map(rel => {
             const abs = path.join(root, rel);
             const source = fs.readFileSync(abs, 'utf8');
@@ -189,6 +239,9 @@ function compileProject(root, options = {}) {
         for (const entry of entries) {
             const mapper = (spec) => {
                 if (spec.startsWith('/_framework/')) return spec;
+                if (spec === 'react' || spec === 'react/jsx-runtime' || spec === 'react/jsx-dev-runtime') {
+                    return '/_framework/react.js';
+                }
 
                 const local = resolveLocal(entry.rel, spec);
                 if (local) {
@@ -320,6 +373,7 @@ module.exports = {
     browserUrlMap,
     browserAssetMap,
     collectSources,
+    followImports,
     inspectPackage,
     packageNameOf,
     SOURCE_DIRS,

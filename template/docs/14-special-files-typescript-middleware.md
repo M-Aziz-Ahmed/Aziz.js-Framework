@@ -117,12 +117,25 @@ app/
   api/users/route.ts
 ```
 
-Types are **stripped, not checked**. Nothing verifies your types, so run
-`tsc --noEmit` in CI if you want that. Use `tsconfig.json` for your editor
-and tooling — it is never served to the browser.
+Types are **stripped at build time, not verified there**. The framework ships
+`tsconfig.json` and `types/aziz.d.ts` — the latter declares the framework's
+globals (`useState`, `useFetch`, `navigate`, `Link`, …) so a `.tsx` page needs
+no imports. To actually check them:
+
+```bash
+npm i -D typescript
+npm run typecheck      # tsc --noEmit
+```
+
+`npm run typecheck` is wired into `package.json` and says so plainly when
+TypeScript is not installed, so it is safe to leave in a JavaScript project.
 
 `interface`, `type`, generics, `as` casts and annotations all compile away
 before the code reaches the browser.
+
+> `app/api/**/route.ts` is loaded by Node directly rather than by Babel, so it
+> relies on Node's own type stripping. Node 22.6+ (and 23+) can run it as-is;
+> on older Node use `.js`.
 
 ---
 
@@ -178,8 +191,9 @@ An entry without a `.source` matches every path, so a bare string
 "run on /admin".
 
 > Middleware is a convenience, not a security boundary. It runs in the same
-> unsandboxed Node process as your API routes. Add rate limiting and CSRF
-> protection yourself, and never put a secret in the client bundle.
+> unsandboxed Node process as your API routes. CSRF validation and rate
+> limiting are built in (see [Security](./16-security.md)), but *authentication*
+> is yours to add — and never put a secret in the client bundle.
 
 ---
 

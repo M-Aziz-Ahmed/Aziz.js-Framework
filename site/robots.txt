@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://m-aziz-ahmed.github.io/Aziz.js-Framework/sitemap.xml

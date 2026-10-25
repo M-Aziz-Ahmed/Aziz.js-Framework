@@ -1,6 +1,6 @@
 # ⚡ Aziz.js
 
-**A Next.js-shaped framework with zero runtime dependencies.** File-based routing, TypeScript, global hooks, SSR + hydration, SSG/ISR, streaming Suspense, server-side API routes and middleware — served as ~20 KB gzipped of ES modules, no bundler.
+**Aziz.js Framework** is a Next.js-inspired React framework by **[Syed Muhammad Aziz Ahmed](https://github.com/M-Aziz-Ahmed)**, with zero runtime dependencies. File-based routing, TypeScript, global hooks, SSR + hydration, SSG/ISR, streaming Suspense, server-side API routes and middleware — served as ~20 KB gzipped of ES modules, no bundler.
 
 ```bash
 npx create-aziz-app my-app
@@ -11,18 +11,26 @@ npm run dev
 
 > **`npm install` is not optional.** JSX is compiled by `@babel/standalone`. Until it is installed, every page fails to load and you get the built-in 404. The dev server prints a banner telling you so.
 
+**Project:** [GitHub](https://github.com/M-Aziz-Ahmed/Aziz.js-Framework) · [npm](https://www.npmjs.com/package/create-aziz-app) · [Issues](https://github.com/M-Aziz-Ahmed/Aziz.js-Framework/issues) · **Author:** [Syed Muhammad Aziz Ahmed](https://github.com/M-Aziz-Ahmed) · **License:** [MIT](./LICENSE)
+
 ---
 
 ## Contents
 
 **Learn it**
-- [Why](#why) · [Numbers](#numbers) · [Vs Next.js](#vs-nextjs) · [When *not* to use it](#when-not-to-use-it)
+- [About](#about-this-project) · [Why](#why) · [Numbers](#numbers) · [Vs Next.js](#vs-nextjs) · [When *not* to use it](#when-not-to-use-it)
 
 **Build with it**
 - [Routing](#routing) · [Layouts](#layouts) · [Loading & errors](#loading--errors) · [Hooks](#hooks) · [Navigation](#navigation) · [Metadata](#metadata) · [Middleware](#middleware) · [API routes](#api-routes) · [Prefetching](#prefetching)
 
 **Operate it**
-- [Project layout](#project-layout) · [Security model](#security-model) · [Limitations](#limitations) · [Troubleshooting](#troubleshooting)
+- [Project layout](#project-layout) · [Security](#security) · [Security model](#security-model) · [Limitations](#limitations) · [Troubleshooting](#troubleshooting)
+
+---
+
+## About this project
+
+Aziz.js Framework (npm: [`create-aziz-app`](https://www.npmjs.com/package/create-aziz-app)) is an open-source, Next.js-inspired React framework created and maintained by **Syed Muhammad Aziz Ahmed** ([@M-Aziz-Ahmed](https://github.com/M-Aziz-Ahmed)). It provides file-based routing, server rendering, API routes, middleware and a small ES-module runtime without a bundler. The source lives at [M-Aziz-Ahmed/Aziz.js-Framework](https://github.com/M-Aziz-Ahmed/Aziz.js-Framework).
 
 ---
 
@@ -39,9 +47,11 @@ Next.js conventions without Next.js overhead. You already know the mental model,
 | `node_modules` | **36.7 MB** (1 build tool) | **~190 MB+** |
 | Runtime dependencies | **0** | react + react-dom + 6 |
 | `import` needed for hooks | **no** | yes |
-| TypeScript | ✅ `.ts` / `.tsx` | ✅ |
+| TypeScript | ✅ `.ts` / `.tsx` + `tsc --noEmit` | ✅ |
 | Middleware | ✅ `middleware.js` | ✅ |
 | File-based metadata | ✅ incl. Open Graph | ✅ |
+| CSRF / rate limit / CORS | ✅ built in | ⚠️ you add them |
+| Security headers | ✅ every response | ⚠️ you add them |
 
 Everything above is measured on this repository — see [Numbers](#numbers).
 
@@ -57,7 +67,7 @@ Measured at v3.2.0, Node 24.16, Windows. Next.js figures come from the npm regis
 | Dev dependency | `@babel/standalone`, 36.7 MB | build-time only |
 | `next` for comparison | 183.6 MB unpacked | `dist.unpackedSize` |
 
-**Caveats we won't bury:** nothing is minified, tree-shaken or code-split. `@babel/standalone` is 36.7 MB on disk. Both are true, and both are consequences of having no bundler.
+**Caveats we won't bury:** no JS is minified, tree-shaken or code-split. (CSS *is* minified — `npm run build` compiles Tailwind with `--minify`.) `@babel/standalone` is 36.7 MB on disk. Both are true, and both are consequences of having no bundler.
 
 ### The Babel tax, and how the build removes it
 
@@ -99,6 +109,11 @@ SSR + hydration · file-based routing · nested & dynamic (`[slug]`) and catch-a
 | Metadata | ✅ server-rendered `<head>` |
 | Edge runtime | ⚠️ API routes with `runtime = 'edge'` (capability boundary, not an isolate) |
 | i18n routing | ✅ locale prefixes, `[locale]` routes, cookie/`Accept-Language` |
+| CSRF protection | ✅ origin validation, optional double-submit token |
+| Rate limiting | ✅ per IP on `/api/**`, `429` + `Retry-After` |
+| CORS | ✅ same-origin by default, allow-list by config |
+| Security headers | ✅ CSP, nosniff, frame options, referrer, permissions — on every response |
+| Type checking | ✅ `tsc --noEmit` via `npm run typecheck` |
 | Production hardening | ✅ precompiled build (no Babel at runtime), brotli/gzip, hashed immutable assets, health endpoint, graceful shutdown, security headers, dependency preflight |
 | Multi-instance deploy | ✅ shared ISR cache (`AZIZ_CACHE_DIR`) with atomic writes + regeneration locks, or a pluggable cache adapter (`AZIZ_CACHE_ADAPTER`) |
 | Containers & CI | ✅ `Dockerfile` (3-stage, non-root, no compiler in the image) + GitHub Actions pipeline in the framework repo |
@@ -132,7 +147,17 @@ Every `page.*` under `app/` is a route.
 | `app/loading.tsx` | loading UI for this subtree |
 | `app/error.tsx` | error boundary for this subtree |
 
-`.js`, `.jsx`, `.ts` and `.tsx` all work. Types are stripped at build time — there is **no type checking**; run `tsc --noEmit` yourself if you want it.
+`.js`, `.jsx`, `.ts` and `.tsx` all work. Types are **stripped** at build time;
+verification is a separate, optional step:
+
+```bash
+npm i -D typescript
+npm run typecheck      # tsc --noEmit
+```
+
+The template ships `tsconfig.json` and `types/aziz.d.ts`, which declares the
+framework's globals (`useState`, `useFetch`, `navigate`, `Link`, …) so a `.tsx`
+page needs no imports.
 
 No imports needed:
 
@@ -386,17 +411,20 @@ is separate from the automatic link prefetch, so you can opt into both.
 my-app/
 ├── index.html                  ← document shell (SSR injects #root + <head>)
 ├── middleware.js               ← optional auth/redirect hook
+├── aziz.config.js              ← optional security config (CSRF, CORS, rate limit)
 ├── i18n.js                     ← optional locale routing config
+├── tsconfig.json               ← optional; `npm run typecheck` uses it
+├── types/aziz.d.ts             ← global types for the framework API
 ├── .aziz/                      ← build output: static HTML + ISR cache
 ├── app/
-│   ├── layout.tsx              ← root layout
-│   ├── page.tsx                ← /
-│   ├── loading.tsx             ← optional
-│   ├── error.tsx               ← optional
-│   ├── 404.tsx                 ← optional
-│   ├── about/page.tsx
-│   ├── blog/[slug]/page.tsx
-│   └── api/users/route.ts
+│   ├── layout.js               ← root layout
+│   ├── page.js                 ← /
+│   ├── loading.js              ← optional
+│   ├── error.js                ← optional
+│   ├── 404.js                  ← optional
+│   ├── about/page.js
+│   ├── blog/[slug]/page.js
+│   └── api/users/route.js
 ├── api/users.js                ← classic API routes
 ├── components/ lib/ models/    ← client-importable
 ├── server/                     ← NEVER served (server-only modules)
@@ -404,14 +432,46 @@ my-app/
 ├── _framework/                 ← the runtime (including components.js)
 └── scripts/
     ├── dev-server.js
-    └── build.js                ← SSG/ISR prerender pass
+    ├── build.js                ← SSG/ISR prerender pass
+    └── typecheck.js            ← optional `tsc --noEmit`
 ```
 
-Scripts: `npm run dev` · `npm run build` · `npm start`. Port via
-`PORT=4000 npm run dev`. `build` is **not** a bundler — it boots the production
-server, prerenders static pages into `.aziz/`, and leaves dynamic pages to SSR.
+Scripts: `npm run dev` · `npm run build` · `npm start` · `npm run typecheck`.
+Port via `PORT=4000 npm run dev`. `build` is **not** a bundler — it precompiles
+your modules into `.aziz/compiled`, boots the production server, prerenders
+static pages into `.aziz/`, and leaves dynamic pages to SSR.
 
 Deep dive: [Server Rendering, SSG, ISR, Streaming, Images & i18n](./template/docs/15-server-rendering-ssg-streaming.md).
+
+## Security
+
+The boring defences are on by default. Everything is configured from an
+optional `aziz.config.js` in the project root:
+
+```js
+// aziz.config.js
+module.exports = {
+  security: {
+    csrf: 'origin',             // 'origin' | 'strict' | false
+    cors: { origin: false },    // false | '*' | 'https://app.example.com'
+    rateLimit: { windowMs: 60_000, max: 300 },
+    trustProxy: false,
+  },
+};
+```
+
+| Defence | Default | What it does |
+| --- | --- | --- |
+| **CSRF** | `Origin` / `Referer` / `Sec-Fetch-Site` validation on `POST`/`PUT`/`PATCH`/`DELETE` | A cross-site write is rejected with `403` before the handler runs. `'strict'` adds a double-submit token (`X-Aziz-CSRF`), which the bundled client sends automatically. |
+| **CORS** | same-origin only | No `Access-Control-Allow-Origin` is sent, so another origin cannot call your API from a browser. Allow-list origins in the config. |
+| **Rate limit** | 300 req/min per IP on `/api/**` | `429` with `Retry-After`, plus `X-RateLimit-*` headers on every response. |
+| **Security headers** | CSP, `nosniff`, frame options, referrer policy, permissions policy, COOP (and HSTS in production) | Applied to *every* response — pages, API, static files, redirects, 404s, 500s. |
+
+A header you set yourself always wins. `aziz.config.js` is never served to the
+browser.
+
+Authentication is still yours: use `middleware.js` as the guard. Full guide:
+[Security](./template/docs/16-security.md).
 
 ## Security model
 
@@ -425,7 +485,7 @@ The dev server enforces the boundary.
 | --- | --- |
 | Dotfiles | `.env`, `.env.local`, `.npmrc`, `.git/config` |
 | Project metadata | `package.json`, `package-lock.json`, `tsconfig.json` |
-| `middleware.*` | the server-side auth hook — never a browser module |
+| Server hooks | `middleware.*`, `aziz.config.js` |
 | `app/api/**` | API route *source*; the routes themselves live at `/api/**` |
 | `node_modules/` | reachable only via `/_modules/<pkg>` |
 | `server/` `data/` | server-only modules, flat-file persistence |
@@ -434,6 +494,19 @@ The dev server enforces the boundary.
 | `scripts/` except `live-reload-client.js` | the dev server itself |
 
 **Served:** `app/` (except `app/api/**`), `components/`, `models/`, `lib/`, `styles/`, `_framework/`, `index.html`.
+
+> ### Why your page source is visible
+> There is no bundler, so the browser imports your page modules over HTTP:
+> `import Page from '/app/page.js'`. Typing that URL in the address bar shows
+> you the compiled module — that is the design, not a leak, and it is the same
+> thing you get with any SPA.
+>
+> In production the source path **redirects to the hashed artifact**
+> (`/app/page.js` → `/_compiled/app/page.<hash>.js`), so there is exactly one
+> URL per module, it is cached forever, and no request ever compiles on demand.
+>
+> If a module is only ever used by an API route, put it in **`server/`** or name
+> it **`*.server.mjs`** — then it is not served at all.
 
 > ### The one rule that matters
 > If a module is only ever used by an API route, put it in **`server/`** or name it **`*.server.mjs`**.
@@ -449,14 +522,18 @@ The dev server enforces the boundary.
 > ```
 > `lib/` and `models/` **stay public by design** so `import User from '@/models/User'` keeps working.
 
-**What is still not protected:** no CSRF tokens, no rate limiting, no auth. API routes run unsandboxed Node with full filesystem access. Add your own — `middleware.js` gives you the hook.
+**What is still not protected:** no auth. API routes run unsandboxed Node with
+full filesystem access — add your own session handling, and use `middleware.js`
+as the guard. CSRF, rate limiting, CORS and security headers are built in.
 
 ## Limitations
 
 1. **Not React RSC.** Async server components and `server/` modules exist, but
    there is no React Server Component protocol or client-reference graph.
-2. **No type checking.** Types are stripped, not verified.
-3. **No bundler.** No minification, tree-shaking or code splitting.
+2. **Types are stripped, not verified, at build time.** `npm run typecheck`
+   runs `tsc --noEmit` — but only if you install TypeScript (`npm i -D typescript`).
+3. **No bundler.** No JS minification, tree-shaking or code splitting. (CSS *is*
+   minified at build time.)
 4. **Image resizing needs `sharp`.** It is an optional dependency installed by
    default; if unavailable, `/_aziz/image` serves the original bytes.
 5. **Edge runtime is a `vm` capability boundary**, not a V8 isolate.
@@ -465,7 +542,9 @@ The dev server enforces the boundary.
    in your own store with `AZIZ_CACHE_ADAPTER`.
 7. **Streaming boundaries are DOM swaps** and do not preserve listeners inside
    the swapped subtree.
-8. **One maintainer.** A security policy exists (`SECURITY.md`), but the project
+8. **The rate limit is per process.** Behind several instances, each enforces
+   its own limit.
+9. **One maintainer.** A security policy exists (`SECURITY.md`), but the project
    is not battle-tested. Validate before real traffic.
 
 ## Troubleshooting
@@ -480,13 +559,14 @@ The dev server enforces the boundary.
 | Type error that doesn't fail the build | Expected — types are stripped, not checked |
 | API route 404 | Check `api/` vs `app/api/`, and don't mix `require` + `export` |
 | Spinner flashes | Route crossed the 200 ms guard — delete the nearest `loading.js` |
-| Server dies on Windows: `Assertion failed: !_wcsnicmp` | Upstream Node watcher bug (~1 in 8 with nested dirs). Restart. |
 | Port busy | The server auto-increments; read the URL it prints |
 
-### Known upstream issue
+### Live reload on Windows
 
-Node's Windows directory watcher can abort the process at startup with `Assertion failed: !_wcsnicmp(filename, dir, dirlen)`. It's a native assertion that `try/catch` cannot intercept, and it is **not** caused by `recursive: true` — a non-recursive watcher hits it too, which is why we haven't switched strategies. Measured here: **1 start in 8** with nested subdirectories, **0 in 5** on a flat project.
+Node's Windows directory watcher can abort the process with `Assertion failed: !_wcsnicmp(filename, dir, dirlen)` when a file is edited. Aziz.js therefore uses a 400 ms mtime poller on Windows instead of `fs.watch`. Set `AZIZ_WATCH_POLL=1` to force polling on any platform, or `AZIZ_NO_WATCH=1` to disable the watcher.
 
 ---
 
-**Author:** Syed Muhammad Aziz Ahmed · **License:** MIT · **Security:** [SECURITY.md](./SECURITY.md)
+**Aziz.js Framework** is created and maintained by **[Syed Muhammad Aziz Ahmed](https://github.com/M-Aziz-Ahmed)** ([npm](https://www.npmjs.com/~azizahmed_dev) · [email](mailto:azizahmed10088@gmail.com)).
+
+**License:** [MIT](./LICENSE) · **Security:** [SECURITY.md](./SECURITY.md) · **Authors:** [AUTHORS.md](./AUTHORS.md)

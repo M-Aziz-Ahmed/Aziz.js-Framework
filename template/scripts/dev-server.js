@@ -19,7 +19,7 @@ const { resolveNodeModule } = require('./lib/module-resolver');
 const apiRouter = require('./lib/api-router');
 const { buildRouteManifest, buildServerRoutes } = require('./lib/route-manifest');
 const pageRouter = require('./lib/page-router');
-const { ServerModuleLoader } = require('./lib/module-loader');
+const { ServerModuleLoader, resolveFile } = require('./lib/module-loader');
 const renderer = require('./lib/renderer');
 const staticStore = require('./lib/static-store');
 const imageOptimizer = require('./lib/image-optimizer');
@@ -27,11 +27,22 @@ const fontOptimizer = require('./lib/font-optimizer');
 const tailwind = require('./lib/tailwind');
 const precompile = require('./lib/precompile');
 const compression = require('./lib/compression');
+const security = require('./lib/security');
 
 const PORT = parseInt(process.env.PORT, 10) || 3000;
 const ROOT = process.cwd();
 const PRODUCTION = process.argv.includes('--production') || process.env.NODE_ENV === 'production';
 const TAILWIND = tailwind.isEnabled(ROOT);
+
+// ─── Security ────────────────────────────────────────────────
+//
+// aziz.config.js is optional. Without it the defaults apply: CSRF
+// origin checks, same-origin-only CORS, a per-IP rate limit on API
+// routes, and a security header set on every response.
+const APP_CONFIG = security.loadConfig(ROOT);
+const SECURITY = APP_CONFIG.security;
+const SECURITY_HEADERS = security.securityHeaders(SECURITY, { production: PRODUCTION });
+const RATE_LIMITER = security.createRateLimiter(SECURITY.rateLimit);
 
 // ─── Production build output ─────────────────────────────────
 //
@@ -79,6 +90,9 @@ const BLOCKED_FILES = new Set([
     'middleware.mjs',
     'middleware.cjs',
     'middleware.ts',
+    // The security config holds CORS allowlists and origin rules.
+    'aziz.config.js',
+    'aziz.config.cjs',
 ]);
 
 // Directories that only ever hold server-side code or data.
@@ -91,11 +105,16 @@ const BLOCKED_DIRS = new Set([
 // scripts/ holds the dev server itself, but index.html needs one file from it.
 const ALLOWED_SCRIPT_FILES = new Set(['live-reload-client.js']);
 
-// Explicit server-only modules: anything named *.server.{js,mjs,jsx}
-const SERVER_MODULE_RE = /\.server\.(m?js|jsx)$/;
+// Explicit server-only modules: anything named *.server.{js,mjs,cjs,jsx,ts,mts,cts,tsx}
+const SERVER_MODULE_RE = /\.server\.(?:[cm]?[jt]sx?)$/i;
 
 function forbiddenReason(urlPath) {
-    const parts = urlPath.split('/').filter(Boolean);
+    // Decode first: %2eenv must be treated exactly like .env. The static
+    // path is decoded later, so checking only the raw URL would leak every
+    // dotfile to anyone who percent-encodes its dot.
+    let decoded = urlPath;
+    try { decoded = decodeURIComponent(urlPath); } catch { return 'malformed path'; }
+    const parts = decoded.replace(/\\/g, '/').split('/').filter(Boolean);
     if (parts.length === 0) return null;
 
     // Any dotfile or dot-directory: .env, .env.local, .git/config, .npmrc …
@@ -301,18 +320,24 @@ function sendMiddlewareResponse(res, result, method) {
 
 // ─── Page rendering (SSR / SSG / ISR / streaming) ────────────
 
-function looksLikeBrowserModule(urlPath) {
+// Resolve a browser URL to the file a module import should receive.
+// Handles the extensionless form browsers do not resolve themselves:
+//   /components/Card   → components/Card.jsx
+//   /components/Card   → components/Card/index.tsx
+// and refuses anything outside the project root.
+function resolveBrowserModule(urlPath) {
     let decoded;
-    try { decoded = decodeURIComponent(urlPath); } catch { return false; }
-    const base = path.join(ROOT, decoded);
+    try { decoded = decodeURIComponent(urlPath); } catch { return null; }
+
     const root = path.resolve(ROOT);
-    if (!path.resolve(base).startsWith(root + path.sep) && path.resolve(base) !== root) return false;
-    if (fs.existsSync(base) && fs.statSync(base).isFile()) return true;
-    for (const ext of ['.js', '.jsx', '.ts', '.tsx', '.mjs']) {
-        if (fs.existsSync(base + ext)) return true;
-        if (fs.existsSync(path.join(base, 'index' + ext))) return true;
-    }
-    return false;
+    const base = path.resolve(ROOT, '.' + (decoded.startsWith('/') ? decoded : '/' + decoded));
+    if (base !== root && !base.startsWith(root + path.sep)) return null;
+
+    return resolveFile(base);
+}
+
+function looksLikeBrowserModule(urlPath) {
+    return !!resolveBrowserModule(urlPath);
 }
 
 function getCookie(header, name) {
@@ -336,20 +361,26 @@ function pageCacheHeaders(dynamic, revalidate) {
 
 // ─── Response helpers ─────────────────────────────────────────
 
-// Security headers applied to every production response. Cheap, and
-// they close the obvious holes (MIME sniffing, clickjacking, referrer
-// leaking).
-const SECURITY_HEADERS = PRODUCTION ? {
-    'X-Content-Type-Options': 'nosniff',
-    'X-Frame-Options': 'SAMEORIGIN',
-    'Referrer-Policy': 'strict-origin-when-cross-origin',
-} : {};
+// SECURITY_HEADERS is built once at startup (see lib/security.js) and is
+// attached to every response — HTML, API, static, redirect and error —
+// by installSecurityHeaders() below.
+
+const CSRF_MODE = security.csrfEnabled(SECURITY);
+
+// In 'strict' mode every document response hands the browser a CSRF
+// token. The client echoes it back in a header; a cross-site attacker
+// can read neither the cookie nor the header.
+function csrfSetCookie() {
+    if (CSRF_MODE !== 'strict') return {};
+    return { 'Set-Cookie': security.csrfCookieHeader(security.createCsrfToken()) };
+}
 
 function sendHtml(req, res, html, status = 200, extraHeaders = {}) {
     const body = Buffer.from(String(html));
     const headers = {
         'Content-Type': 'text/html; charset=utf-8',
         'X-Aziz-Render': 'server',
+        ...csrfSetCookie(),
         ...SECURITY_HEADERS,
         ...extraHeaders,
     };
@@ -552,6 +583,7 @@ async function servePage(req, res, url, rawPath) {
         );
         res.writeHead(finalStatus, {
             'Content-Type': 'text/html; charset=utf-8',
+            ...csrfSetCookie(),
             ...pageCacheHeaders('auto', null),
             'X-Aziz-Render': 'stream',
             'X-Accel-Buffering': 'no',
@@ -651,6 +683,7 @@ const MIME = {
     '.mjs':  'text/javascript; charset=utf-8',
     '.ts':   'text/javascript; charset=utf-8',
     '.tsx':  'text/javascript; charset=utf-8',
+    '.mts':  'text/javascript; charset=utf-8',
     '.css':  'text/css; charset=utf-8',
     '.json': 'application/json; charset=utf-8',
     '.png':  'image/png',
@@ -691,6 +724,11 @@ function etagFor(stat) {
 }
 
 const server = http.createServer(async (req, res) => {
+    // Every response — HTML, API, static file, redirect, 404, 500 —
+    // carries the security headers. Doing it here means no code path
+    // can forget them.
+    security.installSecurityHeaders(res, SECURITY_HEADERS);
+
     const rawUrl = req.url;
     const urlWithoutQuery = rawUrl.split('?')[0];
     const middlewareHeaders = [];
@@ -748,7 +786,12 @@ const server = http.createServer(async (req, res) => {
 
     // ── API routes (api/** and app/api/**/route.js)
     if (urlWithoutQuery === '/api' || urlWithoutQuery.startsWith('/api/')) {
-        await apiRouter.handleApiRequest(req, res, { routes: apiRoutes, port: server.address()?.port || PORT });
+        await apiRouter.handleApiRequest(req, res, {
+            routes: apiRoutes,
+            port: server.address()?.port || PORT,
+            config: APP_CONFIG,
+            rateLimiter: RATE_LIMITER,
+        });
         return;
     }
 
@@ -861,6 +904,20 @@ const server = http.createServer(async (req, res) => {
             return;
         }
 
+        // Serve the package entry from the URL that mirrors its real path.
+        // Browsers resolve a module's relative imports against its URL, so
+        // `import './util.js'` inside `node_modules/pkg/dist/index.js` only
+        // works when the URL keeps the `pkg/dist/` directory structure.
+        const modulesRoot = path.resolve(ROOT, 'node_modules');
+        const canonical = path.relative(modulesRoot, filePath).split(path.sep).join('/');
+        if (canonical.replace(/\\/g, '/') !== specifier) {
+            const query = rawUrl.slice(urlWithoutQuery.length);
+            const location = '/_modules/' + canonical.split('/').map(encodeURIComponent).join('/') + query;
+            res.writeHead(302, { Location: location, ...NO_CACHE });
+            res.end();
+            return;
+        }
+
         try {
             const stat = fs.statSync(filePath);
             let code = fs.readFileSync(filePath, 'utf8');
@@ -966,11 +1023,41 @@ const server = http.createServer(async (req, res) => {
             }
             filePath = resolved;
 
-            // SPA fallback: path with no file extension → serve index.html
-            // so the client-side router handles it
-            const ext = path.extname(filePath);
-            if (!ext && !fs.existsSync(filePath)) {
-                filePath = path.join(ROOT, 'index.html');
+            // Extensionless URLs are ambiguous: they can be a page (handled
+            // above) or a browser module import. Resolve them exactly like
+            // the server loader does — extensions and directory indexes —
+            // instead of dropping straight to the SPA fallback. Getting this
+            // wrong makes `import Card from '../components/Card'` fetch
+            // index.html and fail with a MIME type error in the browser.
+            if (!path.extname(filePath)) {
+                let isDirectory = false;
+                try { isDirectory = fs.statSync(filePath).isDirectory(); } catch { /* missing */ }
+
+                if (isDirectory) {
+                    const indexFile = resolveBrowserModule(urlWithoutQuery);
+                    if (indexFile) {
+                        // Browsers resolve a module's relative imports against
+                        // its URL, so a directory entry must be requested with
+                        // the trailing slash.
+                        if (!urlWithoutQuery.endsWith('/')) {
+                            const query = rawUrl.slice(urlWithoutQuery.length);
+                            res.writeHead(301, { Location: urlWithoutQuery + '/' + query, ...NO_CACHE });
+                            res.end();
+                            return;
+                        }
+                        filePath = indexFile;
+                    } else if (fs.existsSync(path.join(ROOT, 'index.html'))) {
+                        filePath = path.join(ROOT, 'index.html');
+                    }
+                } else {
+                    const moduleFile = resolveBrowserModule(urlWithoutQuery);
+                    if (moduleFile) {
+                        filePath = moduleFile;
+                    } else if (fs.existsSync(path.join(ROOT, 'index.html'))) {
+                        // SPA fallback: let the client-side router handle it.
+                        filePath = path.join(ROOT, 'index.html');
+                    }
+                }
             }
         }
     } catch {
@@ -980,22 +1067,34 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (!fs.existsSync(filePath)) {
-        // Try appending .js / .jsx (import specifiers without extension)
-        if (fs.existsSync(filePath + '.js')) {
-            filePath = filePath + '.js';
-        } else if (fs.existsSync(filePath + '.jsx')) {
-            filePath = filePath + '.jsx';
-        } else if (path.extname(filePath) === '' && fs.existsSync(path.join(ROOT, 'index.html'))) {
-            filePath = path.join(ROOT, 'index.html');
-        } else {
-            res.writeHead(404, { 'Content-Type': 'text/plain' });
-            res.end('Not found: ' + urlWithoutQuery);
+        res.writeHead(404, { 'Content-Type': 'text/plain' });
+        res.end('Not found: ' + urlWithoutQuery);
+        return;
+    }
+
+    // In production, a source path resolves to its precompiled artifact.
+    //
+    // Compiling it here would pull Babel into a production process — the
+    // one thing the precompiled build exists to avoid — and it would be a
+    // second URL for a module the browser already loads from its hashed
+    // one. Redirect to the canonical URL instead.
+    if (PRODUCTION && COMPILED_URLS.size) {
+        const rel = path.relative(ROOT, filePath).split(path.sep).join('/');
+        const hashed = COMPILED_URLS.get(rel);
+        if (hashed) {
+            res.writeHead(302, { Location: hashed, ...NO_CACHE });
+            res.end();
             return;
         }
     }
 
     try {
         const stat = fs.statSync(filePath);
+        if (stat.isDirectory()) {
+            res.writeHead(404, { 'Content-Type': 'text/plain' });
+            res.end('Not found: ' + urlWithoutQuery);
+            return;
+        }
         const fileExt = path.extname(filePath).toLowerCase();
         const isHtml = fileExt === '.html';
         const contentType = MIME[fileExt] || 'application/octet-stream';
@@ -1016,7 +1115,7 @@ const server = http.createServer(async (req, res) => {
         let content = fs.readFileSync(filePath);
 
         // Transform JS/JSX/TS: JSX → h(), types stripped, imports rewritten (mtime-cached)
-        if (['.js', '.jsx', '.mjs', '.ts', '.tsx'].includes(fileExt)) {
+        if (['.js', '.jsx', '.mjs', '.ts', '.tsx', '.mts'].includes(fileExt)) {
             const code = transformModule(content.toString(), filePath, stat.mtimeMs);
             content = Buffer.from(code);
         } else if (fileExt === '.css') {
@@ -1075,14 +1174,12 @@ function notifyClients() {
 
 // ─── File Watcher (development only) ─────────────────────────
 //
-// NOTE: on Windows, Node's directory watcher can abort the process with
-// "Assertion failed: !_wcsnicmp(filename, dir, dirlen)" (src\win\fs-event.c).
-// It is a native assertion that try/catch cannot intercept, it is unrelated
-// to recursive:true (a non-recursive watcher hits it too), and it only shows
-// up on trees with nested subdirectories — roughly 1 start in 8 on the
-// machine this was observed on. It is reproducible enough to be worth
-// reporting upstream, and rare enough that switching watcher strategies
-// costs more than it saves. Restarting the dev server always clears it.
+// Native recursive fs.watch is used on Linux and macOS. On Windows,
+// Node's directory watcher can abort the whole process with
+// "Assertion failed: !_wcsnicmp(filename, dir, dirlen)"
+// (src\win\fs-event.c) the moment a watched file is edited. That is a
+// native assertion try/catch cannot intercept, so Windows gets a small
+// mtime poller instead. AZIZ_WATCH_POLL=1 forces polling everywhere.
 
 const watchDirs = ['app', 'api', 'components', 'lib', 'models', 'styles', '_framework'];
 const SERVER_CODE_DIRS = new Set(['api', 'lib', 'models']);
@@ -1099,59 +1196,115 @@ function rebuildTailwind() {
     }, 200);
 }
 
-if (!PRODUCTION) {
-    console.log('👀 Watching:');
-    watchDirs.forEach(dir => {
-        const full = path.join(ROOT, dir);
-        if (!fs.existsSync(full)) return;
-        console.log(`   - ${dir}/`);
+function handleProjectChange(dir, fullPath) {
+    const dirRoot = path.join(ROOT, dir);
+    const relative = path.relative(dirRoot, fullPath).split(path.sep).join('/');
+    if (!relative || relative.startsWith('..')) return;
+    if (dir === 'styles' &&
+        (relative === 'tailwind.output.css' || relative.endsWith('.map'))) return;
 
+    const ext = path.extname(relative);
+    if (!['.js', '.jsx', '.mjs', '.ts', '.tsx', '.css', '.json'].includes(ext)) return;
 
-        try {
-            fs.watch(full, { recursive: true }, (_, filename) => {
-                if (!filename) return;
-                if (dir === 'styles' &&
-                    (filename === 'tailwind.output.css' || filename.endsWith('.map'))) return;
+    if (ext === '.css') fontOptimizer.invalidateFontPreloads();
 
-                const ext = path.extname(filename);
-                if (!['.js', '.jsx', '.mjs', '.ts', '.tsx', '.css', '.json'].includes(ext)) return;
+    rebuildTailwind();
 
-                if (ext === '.css') fontOptimizer.invalidateFontPreloads();
+    console.log(`\n📝 Changed: ${dir}/${relative}`);
 
-                rebuildTailwind();
+    // Keep both the transform and server module caches fresh. A page module
+    // captures its component imports when it is evaluated, so invalidating
+    // only the changed file leaves a cached page holding the old component.
+    // Clearing the loader makes SSR pick up edits to imported components too.
+    invalidateTransform(fullPath);
+    pageLoader.clear();
 
-                console.log(`\n📝 Changed: ${dir}/${filename}`);
+    if (dir === 'app') {
+        clearTimeout(reloadTimer);
+        reloadTimer = setTimeout(() => {
+            reloadPageRoutes(false);
+            notifyClients();
+        }, 200);
+        return;
+    }
 
-                // Keep both the transform and server module caches fresh
-                const changed = path.join(full, filename);
-                invalidateTransform(changed);
-                pageLoader.invalidate(changed);
+    if (SERVER_CODE_DIRS.has(dir)) {
+        // API routes may import from lib/ and models/ — reload them
+        clearTimeout(reloadTimer);
+        reloadTimer = setTimeout(() => {
+            reloadApiRoutes(false).then(notifyClients);
+        }, 200);
+        return;
+    }
 
-                if (dir === 'app') {
-                    clearTimeout(reloadTimer);
-                    reloadTimer = setTimeout(() => {
-                        reloadPageRoutes(false);
-                        notifyClients();
-                    }, 200);
-                    return;
-                }
+    clearTimeout(reloadTimer);
+    reloadTimer = setTimeout(notifyClients, 300);
+}
 
-                if (SERVER_CODE_DIRS.has(dir)) {
-                    // API routes may import from lib/ and models/ — reload them
-                    clearTimeout(reloadTimer);
-                    reloadTimer = setTimeout(() => {
-                        reloadApiRoutes(false).then(notifyClients);
-                    }, 200);
-                    return;
-                }
-
-                clearTimeout(reloadTimer);
-                reloadTimer = setTimeout(notifyClients, 300);
-            });
-        } catch (err) {
-            console.warn(`   ⚠️ Could not watch ${dir}/: ${err.message}`);
+function snapshotDir(dir) {
+    const files = new Map();
+    const walk = (current) => {
+        let entries;
+        try { entries = fs.readdirSync(current, { withFileTypes: true }); } catch { return; }
+        for (const entry of entries) {
+            if (entry.name === 'node_modules' || entry.name === '.aziz' || entry.name.startsWith('.')) continue;
+            const full = path.join(current, entry.name);
+            if (entry.isDirectory()) {
+                walk(full);
+            } else if (entry.isFile()) {
+                try {
+                    const stat = fs.statSync(full);
+                    files.set(full, stat.mtimeMs + ':' + stat.size);
+                } catch { /* deleted during the scan */ }
+            }
         }
-    });
+    };
+    walk(path.join(ROOT, dir));
+    return files;
+}
+
+function startPollingWatcher(dirs) {
+    const snapshots = new Map(dirs.map(dir => [dir, snapshotDir(dir)]));
+    const timer = setInterval(() => {
+        for (const dir of dirs) {
+            const previous = snapshots.get(dir);
+            const next = snapshotDir(dir);
+            for (const [file, signature] of next) {
+                if (previous.get(file) !== signature) handleProjectChange(dir, file);
+            }
+            for (const file of previous.keys()) {
+                if (!next.has(file)) handleProjectChange(dir, file);
+            }
+            snapshots.set(dir, next);
+        }
+    }, 400);
+    if (typeof timer.unref === 'function') timer.unref();
+    return timer;
+}
+
+// AZIZ_NO_WATCH=1 disables the watcher (used by tests).
+if (!PRODUCTION && process.env.AZIZ_NO_WATCH !== '1') {
+    const dirs = watchDirs.filter(dir => fs.existsSync(path.join(ROOT, dir)));
+    const poll = process.env.AZIZ_WATCH_POLL === '1' || process.platform === 'win32';
+
+    console.log(poll ? '👀 Watching (polling):' : '👀 Watching:');
+    dirs.forEach(dir => console.log(`   - ${dir}/`));
+
+    if (poll) {
+        startPollingWatcher(dirs);
+    } else {
+        dirs.forEach(dir => {
+            const full = path.join(ROOT, dir);
+            try {
+                fs.watch(full, { recursive: true }, (_, filename) => {
+                    if (!filename) return;
+                    handleProjectChange(dir, path.join(full, filename));
+                });
+            } catch (err) {
+                console.warn(`   ⚠️ Could not watch ${dir}/: ${err.message}`);
+            }
+        });
+    }
 
     for (const name of ['i18n.js', 'i18n.cjs', 'i18n.mjs', 'i18n.json']) {
         const file = path.join(ROOT, name);
@@ -1235,6 +1388,14 @@ function startServer(port) {
         console.log(`\n✅ Server running!`);
         console.log(`🌐 http://localhost:${port}/`);
         console.log(PRODUCTION ? '⏹️  Ctrl+C to stop\n' : '⏹️  Ctrl+C to stop\n');
+
+        // Security posture — printed so a deployment is never a guess.
+        const csrf = CSRF_MODE === 'strict' ? 'origin + token'
+            : CSRF_MODE === 'origin' ? 'origin' : 'disabled';
+        const corsOrigin = SECURITY.cors && SECURITY.cors.origin;
+        console.log(`🔒 CSRF: ${csrf} · CORS: ${corsOrigin ? (corsOrigin === true || corsOrigin === '*' ? '*' : 'allowlist') : 'same-origin only'}` +
+            ` · Rate limit: ${SECURITY.rateLimit.enabled ? `${SECURITY.rateLimit.max}/${SECURITY.rateLimit.windowMs / 1000}s per IP` : 'off'}`);
+        console.log(`🛡️  Security headers: ${Object.keys(SECURITY_HEADERS).join(', ')}\n`);
     }).on('error', err => {
         if (err.code === 'EADDRINUSE') {
             console.log(`⚠️  Port ${port} busy, trying ${port + 1}...`);

@@ -2,6 +2,11 @@
 
 There's no built-in auth. Because API routes run in Node and the browser client is flexible, you can add JWT-based, session-based (cookies), or OAuth flows yourself.
 
+What the framework *does* handle for you is the part around authentication:
+CSRF validation, a per-IP rate limit, same-origin CORS and a security header
+set on every response — see [Security](./16-security.md). Authentication
+itself is the part that has to know about *your* users.
+
 ## Principles
 
 - **Don't trust the browser.** Auth must be checked in **API routes** (server), not just hidden in UI.
@@ -165,6 +170,7 @@ const ok = await bcrypt.compare(plain, hash);
 - [ ] Use `HttpOnly` cookies for browser-only apps, or `Authorization` header for SPAs calling external
 - [ ] Don't assume client-side redirects are enough
 - [ ] Keep token expiry short, refresh if needed
+- [ ] Leave the built-in CSRF check on (it is on by default) — see [Security](./16-security.md)
 
 ## Continue
 

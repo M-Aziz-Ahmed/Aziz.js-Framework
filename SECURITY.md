@@ -4,8 +4,8 @@
 
 | Version | Supported |
 | --- | --- |
-| 3.2.x | Yes |
-| Older | No — upgrade to the latest 3.2.x patch |
+| 3.5.x | Yes |
+| Older | No — upgrade to the latest 3.5.x patch |
 
 ## Reporting a vulnerability
 
@@ -42,16 +42,20 @@ are **not** vulnerabilities by themselves:
 - A page importing a public module (`lib/`, `models/`, `components/`) and that
   module being downloadable. The security model treats these as public.
 - The dev server serving source maps or unminified code.
-- Missing rate limits, CSRF tokens or authentication in the scaffold. These are
-  application responsibilities.
+- Missing authentication in the scaffold. That is an application responsibility;
+  the framework ships CSRF validation, a rate limit, same-origin CORS and a
+  security header set — but it cannot know who your users are.
+- Disabling `security.csrf` or widening `security.cors` in `aziz.config.js`.
+  That is a deliberate, documented configuration choice.
 
 The following **are** in scope:
 
 - reading files outside the project through static serving, image optimization,
   module resolution or the build pipeline;
-- executing server-only modules (`server/`, `*.server.*`, `app/api/**`) in the
-  browser;
+- executing server-only modules (`server/`, `*.server.*`, `app/api/**`,
+  `aziz.config.js`) in the browser;
 - bypassing the edge-runtime `require()` boundary (`runtime = 'edge'`);
+- bypassing the built-in CSRF check, the rate limit or the server-only boundary;
 - HTML/attribute injection in the server renderer that escapes the page;
 - request smuggling / header injection in the dev server;
 - path traversal in SSG output or the ISR cache;
@@ -64,8 +68,9 @@ The following **are** in scope:
   `components/`.
 - Put server-only code in `server/` or name files `*.server.js`.
 - Use `runtime = 'edge'` for API routes that must not touch Node built-ins.
-- Add authentication, authorization, CSRF protection and rate limiting in
-  `middleware.js` or in each API route.
+- Leave `security.csrf` and `security.rateLimit` on. If you turn CSRF off,
+  protect the route with a bearer token instead.
+- Add authentication and authorization in `middleware.js` or in each API route.
 - Serve production behind a reverse proxy that sets TLS, request size limits
   and timeouts.
 - Run `npm audit` and keep `@babel/standalone` current.

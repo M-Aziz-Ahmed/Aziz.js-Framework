@@ -10,6 +10,9 @@ my-app/
 |-- .dockerignore           keeps the image context small
 |-- i18n.js                 optional locale routing config
 |-- middleware.js           optional auth/redirect hook
+|-- aziz.config.js          optional security config (CSRF, CORS, rate limit)
+|-- tsconfig.json           optional: `npm run typecheck` uses it
+|-- types/                  global TypeScript declarations
 |-- .aziz/                  build output (gitignored): static HTML + ISR cache
 |--
 |-- app/                    PAGES + LAYOUTS (file-based routing)
@@ -38,13 +41,16 @@ my-app/
 |   |-- dev-server.js       the HTTP server (dev + production, SSR/ISR)
 |   |-- build.js            SSG/ISR build pipeline
 |   |-- build-css.js        optional: compile Tailwind on demand
+|   |-- typecheck.js        optional: run tsc --noEmit
 |   |-- live-reload-client.js
 |   `-- lib/                server renderer, module loader, page router,
 |                           api-router, i18n, image/font optimizers,
+|                           security (CSRF, rate limit, headers),
 |                           tailwind build helper
 |
 `-- docs/                   these guides (optional, --no-docs to skip)
 ```
+
 
 ## The two "worlds"
 

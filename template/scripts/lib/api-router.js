@@ -10,6 +10,7 @@
 const fs = require('fs');
 const path = require('path');
 const edgeRuntime = require('./edge-runtime');
+const security = require('./security');
 const { pathToFileURL } = require('url');
 
 const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'];
@@ -326,12 +327,10 @@ function buildRequest(req, params, rawBody, port) {
 }
 
 // ─── Response sending ────────────────────────────────────────
-
-const CORS_HEADERS = {
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'GET,POST,PUT,PATCH,DELETE,HEAD,OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-};
+//
+// CORS is same-origin by default. The headers are computed per request
+// from `security.cors` and applied by wrapping res.writeHead, so every
+// exit path (handler result, error, preflight) gets them.
 
 function headersToPlain(headers) {
     const out = {};
@@ -358,7 +357,7 @@ function looksLikeJSON(str) {
 }
 
 function sendJson(res, status, data, headOnly) {
-    res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', ...CORS_HEADERS });
+    res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
     res.end(headOnly ? undefined : JSON.stringify(data));
 }
 
@@ -379,7 +378,7 @@ function sendHandlerResult(result, res, { headOnly = false } = {}) {
     }
 
     if (typeof result === 'string') {
-        res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', ...CORS_HEADERS });
+        res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
         res.end(headOnly ? undefined : result);
         return;
     }
@@ -389,9 +388,6 @@ function sendHandlerResult(result, res, { headOnly = false } = {}) {
         if (!headers['Content-Type'] && looksLikeJSON(result.body)) {
             headers['Content-Type'] = 'application/json; charset=utf-8';
         }
-        if (!headers['Access-Control-Allow-Origin']) {
-            Object.assign(headers, CORS_HEADERS);
-        }
         const status = typeof result.status === 'number' ? result.status : 200;
         res.writeHead(status, headers);
         res.end(headOnly ? undefined : (result.body ?? null));
@@ -399,7 +395,7 @@ function sendHandlerResult(result, res, { headOnly = false } = {}) {
     }
 
     // Plain object / array → JSON
-    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', ...CORS_HEADERS });
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
     res.end(headOnly ? undefined : JSON.stringify(result));
 }
 
@@ -410,17 +406,17 @@ function legacyResponseShim(req, res, request) {
         headers: {},
         status(code) { this.statusCode = code; return this; },
         json(data) {
-            res.writeHead(this.statusCode, { 'Content-Type': 'application/json; charset=utf-8', ...CORS_HEADERS, ...this.headers });
+            res.writeHead(this.statusCode, { 'Content-Type': 'application/json; charset=utf-8', ...this.headers });
             res.end(JSON.stringify(data));
         },
         send(data) {
             const type = typeof data === 'object' ? 'application/json; charset=utf-8' : 'text/plain; charset=utf-8';
-            res.writeHead(this.statusCode, { 'Content-Type': type, ...CORS_HEADERS, ...this.headers });
+            res.writeHead(this.statusCode, { 'Content-Type': type, ...this.headers });
             res.end(typeof data === 'object' ? JSON.stringify(data) : data);
         },
         setHeader(k, v) { this.headers[k] = v; return this; },
         redirect(url, code = 307) {
-            res.writeHead(code, { 'Location': url, ...CORS_HEADERS, ...this.headers });
+            res.writeHead(code, { 'Location': url, ...this.headers });
             res.end();
         },
         // Enriched request fields for legacy handlers
@@ -433,8 +429,54 @@ function legacyResponseShim(req, res, request) {
 
 // ─── Full request dispatcher ─────────────────────────────────
 
-async function handleApiRequest(req, res, { routes, port }) {
+async function handleApiRequest(req, res, { routes, port, config, rateLimiter } = {}) {
+    const appConfig = config && config.security ? config : security.mergeConfig({});
+    const sec = appConfig.security;
     const rawPath = req.url.split('?')[0];
+
+    // CORS is opt-in; when it is enabled the headers are attached to the
+    // response object so every exit path below carries them.
+    const cors = security.corsHeaders(sec, req);
+    if (cors) security.installCorsHeaders(res, cors);
+
+    // ── Rate limit ────────────────────────────────────────────
+    // Counts every API request, including 404s, so a scanner cannot
+    // hammer the router for free.
+    if (rateLimiter) {
+        const key = security.clientIp(req, sec);
+        const verdict = rateLimiter.check(key);
+        if (!verdict.allowed) {
+            res.writeHead(429, {
+                'Content-Type': 'application/json; charset=utf-8',
+                'Retry-After': String(verdict.retryAfter),
+                'X-RateLimit-Limit': String(verdict.limit),
+                'X-RateLimit-Remaining': '0',
+                'X-RateLimit-Reset': String(Math.ceil(verdict.resetAt / 1000)),
+            });
+            res.end(JSON.stringify({
+                error: 'Too Many Requests',
+                retryAfter: verdict.retryAfter,
+                limit: verdict.limit,
+                windowMs: sec.rateLimit ? sec.rateLimit.windowMs : null,
+            }));
+            return;
+        }
+        res.setHeader('X-RateLimit-Limit', String(verdict.limit));
+        res.setHeader('X-RateLimit-Remaining', String(verdict.remaining));
+        res.setHeader('X-RateLimit-Reset', String(Math.ceil(verdict.resetAt / 1000)));
+    }
+
+    // ── CSRF ──────────────────────────────────────────────────
+    const csrf = security.checkCsrf(req, sec);
+    if (!csrf.ok) {
+        res.writeHead(csrf.status || 403, { 'Content-Type': 'application/json; charset=utf-8' });
+        res.end(JSON.stringify({
+            error: 'CSRF check failed',
+            detail: csrf.reason,
+        }));
+        return;
+    }
+
     let pathname;
     try {
         pathname = decodeURIComponent(rawPath);
@@ -450,7 +492,7 @@ async function handleApiRequest(req, res, { routes, port }) {
         const allow = match
             ? Object.keys(match.route.methods).concat(match.route.legacy ? METHODS : []).join(', ')
             : 'GET,POST,PUT,PATCH,DELETE,HEAD,OPTIONS';
-        res.writeHead(204, { 'Allow': allow, ...CORS_HEADERS });
+        res.writeHead(204, { 'Allow': allow });
         res.end();
         return;
     }
@@ -473,7 +515,6 @@ async function handleApiRequest(req, res, { routes, port }) {
             res.writeHead(405, {
                 'Content-Type': 'application/json; charset=utf-8',
                 'Allow': Object.keys(route.methods).join(', '),
-                ...CORS_HEADERS,
             });
             res.end(JSON.stringify({
                 error: `Method ${req.method} not allowed`,

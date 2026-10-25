@@ -7,10 +7,12 @@ Browser code imports work in two "flavors": **browser modules** served by the de
 | Specifier | Becomes / behavior | Notes |
 |------------|-------------------|-------|
 | `./Component.js` or `../lib/utils` | stays relative | The dev server loads files by path |
+| `./Component` (no extension) | resolved to `.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`, `.mts`, `.json`, or `index.*` | Same as Next.js |
 | `/components/Navbar.js` | absolute in browser → maps to your project root | Works from anywhere |
 | `@/lib/db` | rewritten to `/lib/db` | Handy when deeply nested |
 | `mongoose` | rewritten to `/_modules/mongoose` | Bare npm package |
 | `lodash-es` | rewritten to `/_modules/lodash-es` | Exports field respected |
+| `react`, `react/jsx-runtime` | rewritten to `/_framework/react.js` | Next-style imports map to the framework hooks |
 | `node:fs`, `data:`, `file:`, `http://…` | left untouched | Skipped by the rewriter |
 
 The rewriter runs on **entire modules** (so multi-line `import { … } from 'pkg'` is handled correctly). It rewrites:
@@ -39,7 +41,7 @@ export default function Dashboard() {
 }
 ```
 
-**No imports of React/hooks are needed.** `h`, `Fragment`, `useState`, etc. are global.
+**No imports of React/hooks are needed.** `h`, `Fragment`, `useState`, etc. are global. Components copied from Next.js can keep `import React, { useState } from 'react'` — that specifier maps to the framework's own hooks, not an npm package.
 
 ## npm packages
 
@@ -88,7 +90,8 @@ Bare `mongoose` in API routes is the usual `require('mongoose')` (no `/_modules`
 ## Tips
 
 - Use **absolute** (`/…`) for imports from the root, or `@/` for ergonomic deep imports.
-- Keep imports **explicit** with `.js` extensions when referencing local files in browser code (works fine in this system).
+- File extensions are **optional** for local imports (`./Button` works). Explicit extensions are still fine.
+- A directory import resolves its `index` file (`./ui/Widget` → `ui/Widget/index.jsx`).
 - Dynamic `import()` is rewritten in browser code (`import('lodash-es')` → `import('/_modules/lodash-es')`) and also works natively in Node (`.mjs` context).
 - Avoid mixing `require` into browser code — it's never injected. Stick to `import/export`.
 

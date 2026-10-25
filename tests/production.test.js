@@ -126,6 +126,64 @@ test('precompile emits content-hashed browser artifacts and CommonJS server arti
     }
 });
 
+test('precompile follows imports into directories outside the default source set', () => {
+    const dir = scaffold({
+        'app/page.js': `
+            import Widget from '../shared/ui/Widget';
+            export default function Page() { return <Widget />; }
+        `,
+        'shared/ui/Widget.jsx': `
+            import { tone } from './tone.js';
+            export default function Widget() { return <div className={tone}>shared</div>; }
+        `,
+        'shared/ui/tone.js': `export const tone = 'muted';\n`,
+        'server/secret.js': `export const secret = 'server-only';\n`,
+    });
+    try {
+        const precompile = require(path.join(TEMPLATE, 'scripts', 'lib', 'precompile.js'));
+        const result = precompile.compileProject(dir);
+        assert.ok(result.ok, result.reason);
+
+        const widget = result.manifest.files['shared/ui/Widget.jsx'];
+        const tone = result.manifest.files['shared/ui/tone.js'];
+        assert.ok(widget, 'extensionless imports outside SOURCE_DIRS must be discovered');
+        assert.ok(tone, 'transitive relative imports must be discovered');
+        assert.ok(!result.manifest.files['server/secret.js'], 'server-only files must stay out of the browser build');
+
+        const code = fs.readFileSync(
+            path.join(dir, '.aziz', 'compiled', 'browser', widget.browser), 'utf8');
+        assert.ok(code.includes(tone.url), 'discovered imports must be rewritten to hashed URLs');
+    } finally {
+        fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    }
+});
+
+test('React imports map to the framework shim, not a missing npm package', () => {
+    const dir = scaffold({
+        'app/page.js': `
+            import React, { useState } from 'react';
+            export default function Page() {
+                const [count] = useState(3);
+                return <p>{React.createElement('b', null, count)}</p>;
+            }
+        `,
+    });
+    try {
+        const precompile = require(path.join(TEMPLATE, 'scripts', 'lib', 'precompile.js'));
+        const result = precompile.compileProject(dir);
+        assert.ok(result.ok, result.reason);
+        assert.ok(!result.manifest.deps.missing.includes('react'),
+            'react must not be reported as a missing package');
+
+        const page = result.manifest.files['app/page.js'];
+        const code = fs.readFileSync(
+            path.join(dir, '.aziz', 'compiled', 'browser', page.browser), 'utf8');
+        assert.ok(code.includes('/_framework/react.js'), 'react imports must map to the shim');
+    } finally {
+        fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    }
+});
+
 test('precompile reports missing and CommonJS-only dependencies', () => {
     const dir = scaffold({
         ...APP,
@@ -221,6 +279,36 @@ test('the health endpoint reports a precompiled runtime that never loaded Babel'
             assert.equal(data.precompiled, true);
             assert.equal(data.babel, 'not loaded',
                 'a precompiled production server must not evaluate Babel');
+        });
+    } finally {
+        fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    }
+});
+
+test('a source path redirects to its precompiled artifact instead of compiling on demand', async () => {
+    const dir = scaffold(APP);
+    try {
+        const precompile = require(path.join(TEMPLATE, 'scripts', 'lib', 'precompile.js'));
+        const compiled = precompile.compileProject(dir);
+        assert.ok(compiled.ok, compiled.reason);
+        const page = compiled.manifest.files['app/page.js'];
+        assert.ok(page, 'app/page.js must be in the manifest');
+
+        await withServer(dir, async (port) => {
+            // The browser loads the module from its hashed URL…
+            const asset = await req(port, page.url);
+            assert.equal(asset.status, 200);
+            assert.equal(asset.headers['cache-control'], 'public, max-age=31536000, immutable');
+
+            // …so the source path must not become a second URL that
+            // compiles on demand (which would pull Babel into production).
+            const source = await req(port, '/app/page.js');
+            assert.equal(source.status, 302);
+            assert.equal(source.headers.location, page.url);
+
+            const health = await req(port, '/_aziz/health');
+            assert.equal(JSON.parse(health.body).babel, 'not loaded',
+                'redirecting must not load Babel');
         });
     } finally {
         fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });

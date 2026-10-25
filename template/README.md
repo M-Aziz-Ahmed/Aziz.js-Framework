@@ -4,6 +4,10 @@ A lightweight Next.js-shaped framework with file-based routing, React hooks,
 SSR + hydration, SSG/ISR, streaming Suspense, and ES module imports — **zero
 runtime dependencies, instant startup**.
 
+Created by [Syed Muhammad Aziz Ahmed](https://github.com/M-Aziz-Ahmed).
+Aziz.js is open source on [GitHub](https://github.com/M-Aziz-Ahmed/Aziz.js-Framework)
+and [npm](https://www.npmjs.com/package/create-aziz-app).
+
 ```
 Next.js:  ~400KB  +  20 dependencies  +  10s startup
 Aziz.js:  ~50KB   +  0 dependencies   +  <1s startup
@@ -47,6 +51,9 @@ my-app/
 ├── tailwind.config.js  ← Tailwind theme/content (--css tailwind)
 ├── public/             ← optional static files and images
 ├── i18n.js             ← optional locale routing config
+├── aziz.config.js      ← optional security config (CSRF, CORS, rate limit)
+├── tsconfig.json       ← optional; `npm run typecheck` uses it
+├── types/              ← global TypeScript declarations
 ├── .aziz/              ← generated static HTML + ISR cache
 ├── _framework/         ← runtime, hooks, router (don't touch)
 ├── scripts/            ← dev server, build + live reload (don't touch)
@@ -473,10 +480,43 @@ PORT=4000 npm run dev
 | i18n routing | ✅ | ✅ |
 | Edge API runtime | ⚠️ capability boundary | ✅ isolated |
 | React Server Components | ❌ | ✅ |
-| TypeScript | ⚠️ types stripped | ✅ type-checked |
+| TypeScript | ✅ types stripped + `npm run typecheck` | ✅ type-checked |
+| CSRF protection | ✅ built in | ⚠️ you add it |
+| Rate limiting | ✅ built in | ⚠️ you add it |
+| CORS policy | ✅ same-origin by default | ⚠️ you add it |
+| Security headers | ✅ every response | ⚠️ you add it |
 | Bundle size | **~50KB** | ~400KB+ |
-| Dependencies | **0** | 20+ |
+| Dependencies | **0** (runtime) | 20+ |
 | Startup time | **< 1s** | 10–30s |
+
+---
+
+## Security
+
+The boring defences are on by default, configured from an optional
+`aziz.config.js` in the project root:
+
+```js
+// aziz.config.js
+module.exports = {
+  security: {
+    csrf: 'origin',             // 'origin' | 'strict' | false
+    cors: { origin: false },    // false | '*' | 'https://app.example.com'
+    rateLimit: { windowMs: 60_000, max: 300 },
+    trustProxy: false,
+  },
+};
+```
+
+| Defence | Default |
+| --- | --- |
+| CSRF | `Origin` / `Referer` / `Sec-Fetch-Site` validation on writes; `'strict'` adds a double-submit token |
+| CORS | same-origin only — no `Access-Control-Allow-Origin` is sent |
+| Rate limit | 300 req/min per IP on `/api/**`, `429` + `Retry-After` |
+| Headers | CSP, `nosniff`, frame options, referrer, permissions, COOP — on every response |
+
+`aziz.config.js` is never served to the browser. See
+[docs/16-security.md](./docs/16-security.md).
 
 ---
 
@@ -485,13 +525,13 @@ PORT=4000 npm run dev
 Anything a page can import is served to the browser. Server-only code must live
 in `server/` or a `*.server.js` file (or under `data/`), and API routes run
 unsandboxed Node. Edge routes are a `vm` capability boundary, not a V8 isolate.
-Add authentication, CSRF protection and rate limiting yourself.
+Add authentication yourself — `middleware.js` is the hook for it.
 
-`app/api/**`, `server/`, `data/`, `scripts/`, `.aziz/`, dotfiles and
-`node_modules/` are not served as browser modules.
+`app/api/**`, `server/`, `data/`, `scripts/`, `.aziz/`, `aziz.config.js`,
+dotfiles and `node_modules/` are not served as browser modules.
 
 ---
 
 ## License
 
-MIT
+MIT © 2026 [Syed Muhammad Aziz Ahmed](https://github.com/M-Aziz-Ahmed)

@@ -1,5 +1,51 @@
 # Changelog
 
+## [3.5.2]
+
+### Added
+- **Project metadata and attribution.** `package.json` now names Syed Muhammad Aziz Ahmed as author and links the repository, issue tracker, homepage and MIT license; `AUTHORS.md` and the README/template README credit the creator. A static project site under `site/` (with JSON-LD, `robots.txt` and a sitemap) and a GitHub Pages workflow make the project and its author discoverable.
+- **Next.js-style React imports.** `import React, { useState } from 'react'` now resolves to `/_framework/react.js`, backed by the framework's own hooks, instead of 404ing on `/_modules/react`. `react/jsx-runtime` and `react/jsx-dev-runtime` map to the same shim.
+
+### Fixed
+- **Extensionless component imports returned `index.html`.** `import Card from '../components/Card'` fell through to the SPA fallback and reached the browser as `text/html`, so the import failed with a MIME-type error. The dev server now resolves `.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`, `.mts` and `.json` (plus `index.*` for directories) before the fallback, matching Next.js.
+- **Directory imports worked in dev but returned `500 EISDIR` in production.** `/components/Widget` now serves `Widget/index.js` and redirects to the trailing-slash URL.
+- **Imports inside bare npm packages resolved against the wrong directory.** `/_modules/pkg` now redirects to the package's real entry path (`/_modules/pkg/dist/index.js`), so its relative imports resolve correctly.
+- **Editing an imported component did not update SSR.** The watcher invalidated only the changed file while the cached page module kept the old component. It now clears the server module loader, so both SSR and the browser receive the new code.
+- **The dev server could abort on Windows when a watched file was edited** (`Assertion failed: !_wcsnicmp(filename, dir, dirlen)` from `src\win\fs-event.c`). Windows now uses an mtime poller; `AZIZ_WATCH_POLL=1` forces it elsewhere and `AZIZ_NO_WATCH=1` disables watching.
+- **Path traversal through `/_modules/` could read files outside the package** (`/_modules/tailwindcss/../../../package.json` returned the framework's `package.json`). Package resolution now rejects `..` and stays inside the package.
+- **Percent-encoded dotfiles bypassed the static-file block list** (`/%2eenv` served `.env`). The URL is decoded before the block list is applied.
+- **`.server.ts`, `.server.tsx` and `.server.mts` were served to the browser.** Server-only module detection now covers every server extension.
+- **Components outside `app/`, `components/`, `lib/` and `models/` were compiled at runtime in production** (or failed without Babel). The build now follows imports and precompiles reachable files anywhere in the project, while still excluding `server/`, `data/`, `api/`, `scripts/` and `*.server.*`.
+
+## [3.5.1]
+
+### Added
+- **Built-in CSRF protection.** State-changing requests (`POST`, `PUT`, `PATCH`, `DELETE`) are validated against `Origin`, `Referer` and `Sec-Fetch-Site` before the handler runs — a cross-site write is rejected with `403`. `security.csrf: 'strict'` adds a double-submit token: the server hands the browser a `__aziz_csrf` cookie and the client echoes it back in `X-Aziz-CSRF`. The bundled client does this automatically — `window.fetch` is wrapped once in `boot.js`, so `api.post()`, `useFetch()`, `fetchResource()` and your own `fetch()` calls are all covered. Non-browser clients (curl, another server) send no `Origin`/`Referer` and keep working unchanged.
+- **Built-in rate limiting.** `/api/**` is limited per client IP — 300 requests per minute by default. Over the limit: `429`, a `Retry-After` header and `X-RateLimit-Limit` / `-Remaining` / `-Reset` on every API response.
+- **`aziz.config.js`** — one optional file for the whole security posture: `csrf`, `cors`, `rateLimit`, `trustProxy` and `headers`. A broken config logs a warning instead of taking the server down. The file is never served to the browser.
+- **Security headers on every response.** `Content-Security-Policy`, `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`, `Cross-Origin-Opener-Policy` and `X-XSS-Protection`, plus `Strict-Transport-Security` in production. Previously only three headers were sent, only in production, and only on some responses — API responses, streamed documents, redirects and every 4xx/5xx path were missing them.
+- **Optional type checking.** The template now ships `tsconfig.json` and `types/aziz.d.ts` (global declarations for the hooks, router and components, so a `.tsx` page needs no imports). `npm run typecheck` runs `tsc --noEmit` when TypeScript is installed and says so plainly when it is not. TypeScript is still not a dependency of the framework.
+- **`docs/16-security.md`** — a guide to the security model, the config file and what is still the application's job.
+
+### Changed
+- **⚠️ API CORS is same-origin only by default.** API responses no longer carry `Access-Control-Allow-Origin: *`. Allow an origin explicitly:
+
+  ```js
+  // aziz.config.js
+  module.exports = { security: { cors: { origin: ['https://app.example.com'] } } };
+  ```
+
+  A browser on another origin can no longer call your API from a page. If your app depends on the old permissive behaviour, set `security.cors.origin` to `'*'` (or a list of origins) — the response then carries `Access-Control-Allow-Origin` for those origins only.
+- `npm run build` output is documented accurately: CSS **is** minified (Tailwind is compiled with `--minify`), JS is not.
+- The docs no longer claim that the production server "never loads Babel" — your own modules are precompiled, but bare npm imports still go through `/_modules/` and compile on demand.
+
+### Fixed
+- The `Content-Security-Policy` was absent entirely, so a cross-site script injection had nothing to stop it.
+- API responses were sent with `Access-Control-Allow-Origin: *` **and** `Access-Control-Allow-Headers: Authorization`, which let any origin issue an authenticated `fetch` against an API and read the response.
+- **A request for a source path in production compiled the file on demand.** `GET /app/page.js` pulled Babel into the production process — the one thing the precompiled build exists to prevent — and created a second, uncached URL for a module the browser already loads from its hashed one. The source path now redirects to the hashed artifact (`/app/page.js` → `/_compiled/app/page.<hash>.js`).
+- `docs/01`, `docs/12`, `docs/13` and `docs/15` contained stale claims about on-demand compilation, minification, the Babel-free production path, the ISR locking model and the image cache location.
+- `docs/13` contained an unfinished working note published as documentation.
+
 ## [3.4.0]
 
 ### Added
@@ -72,7 +118,7 @@
 - `useApi` is documented as an alias of `useFetch`; `useFetch().error` is a string, not an `Error`.
 
 ### Known issues
-- On Windows, Node's directory watcher can abort the process at startup with `Assertion failed: !_wcsnicmp` (native, uncatchable). ~1 in 8 starts on projects with nested subdirectories. Not caused by `recursive: true`; restart clears it.
+- On Windows, Node's directory watcher can abort the process at startup with `Assertion failed: !_wcsnicmp` (native, uncatchable). ~1 in 8 starts on projects with nested subdirectories. Not caused by `recursive: true`; restart clears it. **Fixed in 3.5.2** by switching Windows to an mtime poller.
 
 ## [3.1.0] - 2026
 

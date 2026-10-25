@@ -8,7 +8,7 @@ Aziz.js is three distinct things glued together:
 
 1. **Dev server** (`scripts/dev-server.js`) — Node HTTP server. Scans `app/`, serves manifest, transforms JSX, resolves `/_modules/*`, dispatches `/api/*`, serves static files, provides WebSocket live reload.
 2. **Browser runtime** (`_framework/`) — runs in the page. `boot.js` exposes globals, initializes hooks, and calls the router. The router loads the manifest, imports pages/layouts, and mounts them into `#root` via `runtime.js`.
-3. **Transform pipeline** (`scripts/lib/js-transform.js`) — runs on demand: `@babel/standalone` compiles JSX to `h()` calls; import rewriting maps `@/`, bare npm packages, and absolute paths to browser-servable URLs; results are **mtime-cached** per file.
+3. **Transform pipeline** (`scripts/lib/js-transform.js`) — runs on demand in development: `@babel/standalone` compiles JSX to `h()` calls; import rewriting maps `@/`, bare npm packages, and absolute paths to browser-servable URLs; results are **mtime-cached** per file. In production the same pipeline runs once at build time and writes `.aziz/compiled` (see [Precompiled build output](#precompiled-build-output)).
 
 ## Rendering model (lazy vnodes)
 
@@ -108,7 +108,9 @@ Discovered routes are scored and sorted by `compareSpecificity` (static count de
 - response-like (has `body` or `status`+`headers`) → preserves `status`, copies headers, sends body unless `HEAD`
 - plain object/array → `200` + `application/json`
 
-CORS headers are added to all API responses.
+CORS headers are added to API responses **only** when the app allow-lists an
+origin in `aziz.config.js`. The default is same-origin only, so no
+`Access-Control-Allow-Origin` header is sent at all.
 
 ## Module resolution (browser bare imports)
 
@@ -122,7 +124,7 @@ CORS headers are added to all API responses.
 - Resolves relative `./…` subpaths
 - Returns the final absolute filesystem path, or `null` if not found
 
-The dev server reads that file and runs `transformModule` (JSX transform skipped for framework, but bare modules usually contain no JSX; imports inside that module also get rewritten if they're from your app tree? No — the module being served is an npm package file; `transformModule` detects `isFrameworkPath`? Framework files are under `/_framework/` — npm packages are under `node_modules/`, so `isFrameworkPath` is false for them, but Babel will run; many packages don't use JSX. Import rewriting inside that served package's code would rewrite its own imports — but rewriting is correct because it's being served to the browser. The transform is idempotent-ish.
+The dev server reads that file and runs `transformModule`: Babel compiles it (npm packages rarely contain JSX) and `rewriteImports` rewrites the imports inside it, which is correct — the module is being served to the browser. The transform is idempotent-ish.
 
 ## Transform cache
 
@@ -145,9 +147,12 @@ precompiled modules therefore never evaluates the compiler at all — check
 
 `npm run build` runs `scripts/lib/precompile.js` before prerendering:
 
-1. **Collect** — every `.js/.jsx/.ts/.tsx/.mjs` file under `app/`,
+1. **Collect** — every `.js/.jsx/.ts/.tsx/.mjs/.mts` file under `app/`,
    `components/`, `lib/`, `models/`, minus server-only files (`app/api/**`,
-   `*.server.*`).
+   `*.server.*`), plus any code reachable through imports from those files.
+   That means a component in `shared/` or `ui/` is compiled too. Imports
+   into `server/`, `data/`, `api/`, `scripts/` and `*.server.*` are never
+   pulled into the browser build.
 2. **Hash** — `sha256(source).slice(0, 10)`. The hash is derived from the
    *source*, not the output, so the URL is stable and only changes when the
    code changes.
@@ -167,14 +172,20 @@ The manifest (`manifest.json`) maps source paths → hashed URLs and source path
   crafted path cannot escape the compiled directory
 - points the browser at hashed URLs via `/_framework/routes.json`
 - loads precompiled CommonJS in the module loader
+- **redirects a source path to its artifact** — `GET /app/page.js` answers
+  `302 Location: /_compiled/app/page.<hash>.js`. Serving the source would
+  compile it on demand, which pulls Babel into a production process, and it
+  would be a second URL for a module the browser already loads from the
+  hashed one.
 
 In development nothing is precompiled: the watcher keeps working on source.
 
 ## Live reload
 
 - Development only. `server.on('upgrade')` upgrades HTTP → WS, uses a minimal control-frame (no text message parser needed — just accepts the protocol and can send a 1-byte-ish ping/reload; it sends `reload` as a text frame by writing the header+payload for a single-frame text message `0x81 <len> ...`).
-- Watcher monitors: `app`, `api`, `components`, `lib`, `models`, `styles`, `_framework` recursively. Ignores non-JS/JSX/CSS/JSON extensions for the "changed" signal.
-- When a change happens: invalidate transform cache for that file; if the file was under `api/`, `lib/`, or `models/`, **reload API routes** (purge project require cache, `loadApiRoutes`) and then notify clients; otherwise just notify clients. Reloading API routes after `lib/`/`models/` changes means `require()` sees fresh code.
+- Watcher monitors: `app`, `api`, `components`, `lib`, `models`, `styles`, `_framework` recursively. The "changed" signal covers `.js`, `.jsx`, `.ts`, `.tsx`, `.mjs`, `.css` and `.json`.
+- Linux/macOS use native recursive `fs.watch`. Windows uses an mtime poller (every 400 ms) because Node's Windows directory watcher can abort the process with a native assertion when a file is edited. `AZIZ_WATCH_POLL=1` forces the poller; `AZIZ_NO_WATCH=1` disables watching.
+- When a change happens: invalidate the transform cache for that file and clear the server module loader, so SSR picks up edits to imported components rather than serving a cached page module that still holds the old component. Changes under `api/`, `lib/`, or `models/` also **reload API routes** (purge project require cache, `loadApiRoutes`); everything else just notifies clients. Reloading API routes after `lib/`/`models/` changes means `require()` sees fresh code.
 - In production, the live-reload client file (`/scripts/live-reload-client.js`) is replaced by an empty stub.
 
 ## Path traversal guard
@@ -193,12 +204,42 @@ This prevents `../` from escaping the project directory. The check is done after
 
 ## What's not "done" (by design)
 
-- No bundler. JSX is transformed on demand and CSS is served as files (with
-  `@font-face` optimization).
+- No bundler. There is no chunk graph and no tree shaking. In development JSX
+  is transformed on demand; in production it comes from the precompiled
+  artifacts. CSS is served as a file (with `@font-face` optimization) and
+  Tailwind output is minified at build time.
 - Pages are server-rendered and hydrated. SSG/ISR is a separate
   `scripts/build.js` pass into `.aziz/`; it is not a module-graph bundler.
 - No `.env` loader in the server (just `process.env`).
-- No type checking (types are stripped by Babel).
+- No automatic type checking. Types are stripped by Babel; `npm run typecheck`
+  runs `tsc --noEmit` when TypeScript is installed.
+
+## Security internals
+
+`scripts/lib/security.js` holds the whole security layer, and the dev server
+wires it in at startup:
+
+- **`loadConfig(ROOT)`** reads `aziz.config.js` and merges it over the
+  defaults. A broken config logs a warning instead of taking the server down.
+- **`installSecurityHeaders(res, headers)`** wraps `res.writeHead` once per
+  request, so the security headers land on *every* response — pages, API
+  responses, static files, redirects, 404s and 500s. A header the application
+  sets itself always wins.
+- **`checkCsrf(req, config)`** validates `Sec-Fetch-Site`, `Origin` and
+  `Referer` on state-changing requests, and in `strict` mode compares the
+  `X-Aziz-CSRF` header with the `__aziz_csrf` cookie.
+- **`createRateLimiter(options)`** is a fixed-window counter keyed by client
+  IP; the API router answers `429` with `Retry-After` when it is exhausted.
+- **`corsHeaders(config, req)`** returns the CORS headers for a request, or
+  `null` when cross-origin access is not allowed (the default). The headers are
+  applied by wrapping `res.writeHead`, so every exit path carries them.
+
+The client half lives in `_framework/boot.js`: `window.fetch` is wrapped once so
+that same-origin state-changing requests carry the `X-Aziz-CSRF` header. That
+covers `api.post()`, `useFetch()`, `fetchResource()` and any raw `fetch()` a
+page writes.
+
+See [Security](./16-security.md) for the user-facing guide.
 
 ## Tips for debugging
 

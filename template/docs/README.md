@@ -23,6 +23,7 @@ New to Aziz.js? Start at **01**. Comfortable? Jump to the reference you need.
 | 13 | [Internals](./13-internals.md) | Advanced — how the runtime actually works |
 | 14 | [Special Files, TypeScript & Middleware](./14-special-files-typescript-middleware.md) | Intermediate — `loading.js`, `error.js`, `metadata`, TypeScript, `middleware.js`, Suspense |
 | 15 | [Server Rendering, SSG, ISR, Streaming, Images & i18n](./15-server-rendering-ssg-streaming.md) | Advanced — SSR/hydration, SSG/ISR, streaming Suspense, `<Image>`/`<Font>`, edge runtime, i18n |
+| 16 | [Security](./16-security.md) | Advanced — CSRF, CORS, rate limiting, headers, `aziz.config.js` |
 
 ## TL;DR
 

@@ -19,6 +19,68 @@ window.Script = Script;
 // Global API client: api.get('/api/users'), api.post(...), etc.
 window.api = api;
 
+// ─── CSRF ─────────────────────────────────────────────────────
+//
+// In strict mode the server hands every document a `__aziz_csrf`
+// cookie and expects it back in the `X-Aziz-CSRF` header on
+// state-changing requests. Patching window.fetch once covers the api
+// client, useFetch(), fetchResource() and any raw fetch() a page
+// writes — and only for same-origin URLs, so the token is never
+// handed to a third party.
+
+const CSRF_COOKIE = '__aziz_csrf';
+const CSRF_HEADER = 'X-Aziz-CSRF';
+const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+
+function csrfToken() {
+    if (typeof document === 'undefined') return null;
+    const match = document.cookie.match(new RegExp('(?:^|;\\s*)' + CSRF_COOKIE + '=([^;]*)'));
+    return match ? decodeURIComponent(match[1]) : null;
+}
+
+function isSameOrigin(url) {
+    try {
+        return new URL(url, window.location.href).origin === window.location.origin;
+    } catch {
+        return false;
+    }
+}
+
+function withCsrfHeader(input, init) {
+    try {
+        const method = ((init && init.method) || (input && input.method) || 'GET').toUpperCase();
+        if (SAFE_METHODS.has(method)) return [input, init];
+
+        const url = typeof input === 'string' ? input : (input && input.url);
+        if (!url || !isSameOrigin(url)) return [input, init];
+
+        const token = csrfToken();
+        if (!token) return [input, init];
+
+        const headers = new Headers((init && init.headers) || (input && input.headers) || {});
+        if (headers.has(CSRF_HEADER)) return [input, init];
+        headers.set(CSRF_HEADER, token);
+
+        if (init) return [input, { ...init, headers }];
+        if (input && typeof input.clone === 'function') {
+            try {
+                return [new Request(input.clone(), { headers }), undefined];
+            } catch {
+                return [input, init];
+            }
+        }
+        return [input, { headers }];
+    } catch {
+        return [input, init];
+    }
+}
+
+const nativeFetch = window.fetch.bind(window);
+window.fetch = function azizFetch(input, init) {
+    const [url, options] = withCsrfHeader(input, init);
+    return nativeFetch(url, options);
+};
+
 // ─── SSR data ────────────────────────────────────────────────
 //
 // The server serialises every GET response it used while rendering. On the

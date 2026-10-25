@@ -76,6 +76,7 @@ Defined in your project's `package.json`:
     "build": "node scripts/build.js",
     "start": "node scripts/dev-server.js --production",
     "css:build": "node scripts/build-css.js",
+    "typecheck": "node scripts/typecheck.js",
     "test":  "node --test"
   }
 }
@@ -83,12 +84,15 @@ Defined in your project's `package.json`:
 
 - `npm run dev` — development server with live reload, no caching and automatic
   Tailwind rebuilds when the app uses Tailwind.
-- `npm run build` — boots the production server, prerenders static/ISR pages into
-  `.aziz/static`, and writes the static manifest. It compiles Tailwind first. It
-  is not a bundler: source is still compiled on demand.
+- `npm run build` — precompiles every module into `.aziz/compiled`, boots the
+  production server, prerenders static/ISR pages into `.aziz/static`, and
+  writes the static manifest. It compiles Tailwind first. It is not a bundler:
+  there is still no chunk graph and no tree shaking.
 - `npm start` — production server with no live-reload socket, cache headers, SSR,
   static files and ISR.
 - `npm run css:build` — rebuilds `styles/tailwind.output.css` on demand.
+- `npm run typecheck` — runs `tsc --noEmit` when TypeScript is installed
+  (`npm i -D typescript`); says so and exits cleanly when it is not.
 - `npm test` — runs any `**/*.test.js` files via Node's built-in test runner. With no tests present it exits 0.
 
 ## Your first page
@@ -116,7 +120,7 @@ export default function Hello() {
 
 Save. The browser reloads and you're at **<http://localhost:3000/hello>**.
 
-Note: **you didn't import React or any hooks.** `useState`, `h` (the JSX factory), and the router are exposed globally by the framework. See [Hooks](./05-hooks.md).
+Note: **you didn't import React or any hooks.** `useState`, `h` (the JSX factory), and the router are exposed globally by the framework. See [Hooks](./05-hooks.md). If you are porting Next.js code, `import { useState } from 'react'` also works — `react` resolves to the framework's own hooks.
 
 ## Your first API route
 

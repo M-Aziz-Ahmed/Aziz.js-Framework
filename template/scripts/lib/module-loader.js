@@ -18,7 +18,7 @@ const serverRuntime = require('./server-runtime');
 
 const EXTENSIONS = ['', '.js', '.jsx', '.ts', '.tsx', '.mjs', '.mts', '.json'];
 
-const SERVER_MODULE_RE = /\.server\.(m?js|jsx|ts|tsx)$/i;
+const SERVER_MODULE_RE = /\.server\.(?:[cm]?[jt]sx?)$/i;
 
 function isFile(p) {
     try { return fs.statSync(p).isFile(); } catch { return false; }
@@ -29,7 +29,7 @@ function resolveFile(base) {
         const candidate = base + ext;
         if (isFile(candidate)) return candidate;
     }
-    for (const ext of ['.js', '.jsx', '.ts', '.tsx', '.mjs']) {
+    for (const ext of ['.js', '.jsx', '.ts', '.tsx', '.mjs', '.mts']) {
         const candidate = path.join(base, 'index' + ext);
         if (isFile(candidate)) return candidate;
     }
@@ -84,6 +84,33 @@ function createFrameworkExports() {
     };
 
     const withDefault = (obj, def = obj) => ({ __esModule: true, ...obj, default: def });
+
+    // Next-style `import { useState } from 'react'` maps to the same
+    // functions boot.js installs globally.
+    const reactExports = {
+        createElement: runtime.h,
+        Fragment: runtime.Fragment,
+        useState: runtime.useState,
+        useReducer: runtime.useReducer,
+        useEffect: runtime.useEffect,
+        useMemo: runtime.useMemo,
+        useCallback: runtime.useCallback,
+        useRef: runtime.useRef,
+        useContext: runtime.useContext,
+        createContext: runtime.createContext,
+        useLocalStorage: runtime.useLocalStorage,
+        useFetch: runtime.useFetch,
+        memo: component => component,
+        forwardRef: render => {
+            const Forwarded = props => render(props, null);
+            Forwarded.displayName = 'Forwarded';
+            return Forwarded;
+        },
+        jsx: (type, props, key) => runtime.h(type, key === undefined ? props : { ...props, key }),
+        jsxs: (type, props, key) => runtime.h(type, key === undefined ? props : { ...props, key }),
+        jsxDEV: (type, props, key) => runtime.h(type, key === undefined ? props : { ...props, key }),
+    };
+    const react = withDefault(reactExports);
 
     return {
         '/_framework/runtime.js': withDefault({
@@ -145,6 +172,10 @@ function createFrameworkExports() {
             Script: runtime.Script,
         }),
         '/_framework/api.js': withDefault(apiStub, apiStub),
+        '/_framework/react.js': react,
+        'react': react,
+        'react/jsx-runtime': react,
+        'react/jsx-dev-runtime': react,
         '/_framework/boot.js': withDefault({}),
         '/_framework/next-response.js': require(path.join(__dirname, '..', '..', '_framework', 'next-response.js')),
     };

@@ -80,15 +80,39 @@ function resolveExportsField(exportsField, subPath) {
     return null;
 }
 
+// A resolved file must stay inside the package directory. package.json
+// entry fields and subpaths are untrusted input: without this check
+// `/_modules/pkg/../../../.env` would read arbitrary project files.
+function insidePackage(pkgDir, file) {
+    if (!file) return null;
+    const rel = path.relative(pkgDir, file);
+    if (rel === '') return file;
+    if (rel.startsWith('..') || path.isAbsolute(rel)) return null;
+    return file;
+}
+
+function validSpecifierParts(parts) {
+    return parts.every(p => p && p !== '.' && p !== '..' && !p.includes('\0'));
+}
+
 // Resolve a bare specifier ("pkg", "pkg/sub", "@scope/pkg/sub")
 // to an absolute file path inside ROOT/node_modules.
 function resolveNodeModule(specifier, ROOT) {
+    if (typeof specifier !== 'string' || !specifier) return null;
+    specifier = specifier.replace(/\\/g, '/');
+
     const parts = specifier.split('/');
+    if (!validSpecifierParts(parts)) return null;
+
     const isScoped = parts[0].startsWith('@');
+    if (isScoped && parts.length < 2) return null;
     const pkgName = isScoped ? parts[0] + '/' + parts[1] : parts[0];
     const subPath = isScoped ? parts.slice(2).join('/') : parts.slice(1).join('/');
 
-    const pkgDir = path.join(ROOT, 'node_modules', pkgName);
+    const modulesRoot = path.resolve(ROOT, 'node_modules');
+    const pkgDir = path.resolve(modulesRoot, pkgName);
+    if (insidePackage(modulesRoot, pkgDir) === null) return null;
+
     const pkgJsonPath = path.join(pkgDir, 'package.json');
     if (!fs.existsSync(pkgJsonPath)) return null;
 
@@ -104,19 +128,19 @@ function resolveNodeModule(specifier, ROOT) {
         const target = resolveExportsField(pkg.exports, subPath);
         if (target) {
             const resolved = firstExisting([path.join(pkgDir, target)]);
-            if (resolved) return resolved;
+            if (resolved) return insidePackage(pkgDir, resolved);
         }
-        // "exports" exists but didn't resolve — fall through only when
-        // no subpath was requested, so legacy entry fields can still win.
-        if (subPath) return null;
+        // "exports" may not list internal files, but relative imports
+        // inside the package (e.g. from dist/index.js to ./util.js)
+        // still have to be fetchable. Fall through to direct resolution.
     }
 
     if (subPath) {
-        return firstExisting([
+        return insidePackage(pkgDir, firstExisting([
             path.join(pkgDir, subPath),
             path.join(pkgDir, 'dist', subPath),
             path.join(pkgDir, 'src', subPath),
-        ]);
+        ]));
     }
 
     // 2. Legacy entry fields: browser (string) → module → main
@@ -126,7 +150,7 @@ function resolveNodeModule(specifier, ROOT) {
     if (pkg.main) entries.push(pkg.main);
     entries.push('index.js');
 
-    return firstExisting(entries.map(e => path.join(pkgDir, e)));
+    return insidePackage(pkgDir, firstExisting(entries.map(e => path.join(pkgDir, e))));
 }
 
 module.exports = { resolveNodeModule, resolveExportsField };

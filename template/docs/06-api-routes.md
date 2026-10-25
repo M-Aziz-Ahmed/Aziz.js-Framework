@@ -159,17 +159,47 @@ DELETE /api/hello   →  405
   { "error": "Method DELETE not allowed", "allowed": ["GET"] }
 ```
 
-`HEAD` falls back to your `GET` handler automatically (response body suppressed). `OPTIONS` returns `204` with an `Allow` header and CORS preflight headers — useful for cross-origin clients.
+`HEAD` falls back to your `GET` handler automatically (response body suppressed). `OPTIONS` returns `204` with an `Allow` header — plus CORS preflight headers when the request's origin is on your allow-list.
 
 ## CORS
 
-API responses automatically include:
+API responses are **same-origin only** by default — no
+`Access-Control-Allow-Origin` header is sent, so a browser on another origin
+cannot call your API. Allow one in `aziz.config.js`:
+
+```js
+// aziz.config.js
+module.exports = {
+  security: {
+    cors: { origin: ['https://app.example.com'] },
+  },
+};
+```
+
+The allowed origin then gets:
 
 ```
-Access-Control-Allow-Origin: *
+Access-Control-Allow-Origin: https://app.example.com
 Access-Control-Allow-Methods: GET,POST,PUT,PATCH,DELETE,HEAD,OPTIONS
-Access-Control-Allow-Headers: Content-Type, Authorization
+Access-Control-Allow-Headers: Content-Type, Authorization, X-Aziz-CSRF
 ```
+
+`origin: '*'` is allowed but never sends credentials. See
+[Security](./16-security.md).
+
+## CSRF and rate limiting
+
+Both are built in and on by default:
+
+- **CSRF** — `POST`, `PUT`, `PATCH` and `DELETE` are validated against
+  `Origin`, `Referer` and `Sec-Fetch-Site` before your handler runs. A
+  cross-site write gets a `403`. Set `security.csrf: 'strict'` to also require
+  a double-submit token, which the bundled client sends for you.
+- **Rate limit** — 300 requests per minute per IP on `/api/**`. Over the limit
+  you get `429` with a `Retry-After` header.
+
+Both are configured in `aziz.config.js`. See
+[Security](./16-security.md).
 
 ## Native ESM (`.mjs`)
 
